@@ -297,11 +297,13 @@ def auto_discover_trending_coins():
             fetch_3year_historical_data(sym)
             
             msg = (
-                f"🔥 *AUTOMATED TRENDING DISCOVERY!*\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔥 *AUTOMATED TRENDING DISCOVERY*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"🪙 *New Coin Added:* `{sym}`\n"
                 f"📈 *24h Gain:* `+{gain:.2f}%`\n"
                 f"📊 *24h Volume:* `${vol/1e6:.1f}M`\n\n"
-                f"✅ 3-Year Brain Trained & Saved to Persistent Watchlist!"
+                f"✅ 3-Year Brain Trained & Saved to Watchlist!"
             )
             send_telegram_msg(SAVED_CHAT_ID, msg)
             added_count += 1
@@ -443,15 +445,16 @@ def generate_pullback_report(symbol):
     }
 
 def format_telegram_alert(data):
-    """Formats full pullback alert report for Telegram broadcast."""
+    """Formats full pullback alert report for Telegram broadcast with enhanced readability."""
     max_drop = max(data['monthly_drawdown_pct'], data['ath_drawdown_pct'])
     
+    # Title & Color Badge Header
     if max_drop >= 70:
-        grade = "🚨 EXTREME PULLBACK ALERT (-70%+)"
+        header_badge = "🟥 🚨 EXTREME PULLBACK ALERT (-70%+)"
     elif max_drop >= 50:
-        grade = "⚠️ MAJOR PULLBACK ALERT (-50%+)"
+        header_badge = "🟨 ⚠️ MAJOR PULLBACK ALERT (-50%+)"
     else:
-        grade = "📉 NOTABLE PULLBACK DETECTED (-30%+)"
+        header_badge = "🟦 📉 NOTABLE PULLBACK DETECTED (-30%+)"
 
     t25 = data['current_price'] * 1.25
     t50 = data['current_price'] * 1.50
@@ -459,32 +462,37 @@ def format_telegram_alert(data):
 
     confluences = []
     if data.get('near_200ema'):
-        confluences.append(f"🧱 Sitting near 200-Day EMA Key Support (${data['ema_200_price']:.4f})")
+        confluences.append(f"🧱 Sitting near 200-Day EMA Key Support (`${data['ema_200_price']:.4f}`)")
     if data.get('whale_absorption'):
-        confluences.append(f"🐋 Whale Dip Absorption ({data['volume_surge']:.1f}x Volume Surge)")
+        confluences.append(f"🐋 Whale Dip Absorption (`{data['volume_surge']:.1f}x` Volume Surge)")
 
-    conf_text = "\n" + "\n".join([f"  • {c}" for c in confluences]) if confluences else " Standard Dip Level"
+    conf_text = "\n".join([f"  • {c}" for c in confluences]) if confluences else "  • Standard Dip Level"
 
     msg = (
-        f"*{grade}*\n\n"
-        f"🪙 *Asset:* `{data['symbol']}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{header_badge}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🪙 *ASSET:* `{data['symbol']}`\n"
         f"💵 *Current Price:* `${data['current_price']:.6f}`\n"
         f"🌐 *Market Climate:* `{data['market_climate']}`\n\n"
-        f"🏆 *Historical ATH:* `${data['ath_price']:.6f}` (`{data['ath_date']}`)\n"
-        f"🔻 *Fall from 3-Yr ATH:* `-{data['ath_drawdown_pct']:.2f}%`\n\n"
-        f"🌱 *Historical ATL:* `${data['atl_price']:.6f}` (`{data['atl_date']}`)\n"
-        f"📈 *Rebound from ATL:* `+{data['atl_rebound_pct']:.2f}%`\n\n"
-        f"📅 *Monthly High (30d Peak):* `${data['monthly_high']:.6f}`\n"
-        f"🔻 *Fall from Monthly High:* `-{data['monthly_drawdown_pct']:.2f}%`\n\n"
-        f"📊 *Monthly Overview:* Avg `${data['monthly_avg_price']:.6f}` (`{data['monthly_pace_pct']:+.2f}% 30d pace`)\n\n"
-        f"⚡ *Technical Confluence:*{conf_text}\n\n"
-        f"🎯 *Recovery Targets & Profit Goals:*\n"
-        f"  • 25% Bounce Target: `${t25:.6f}` (+25%)\n"
-        f"  • 50% Bounce Target: `${t50:.6f}` (+50%)\n"
-        f"  • Full ATH Rebound: `${data['ath_price']:.6f}` (`+{ath_gain:.1f}%` upside)\n\n"
-        f"🔍 *Pullback Catalyst / Reason:*\n{data['reason']}\n\n"
-        f"🛡️ *Risk Rate:* {data['risk_rate']}\n"
-        f"📈 *Recovery Probability:* `{data['recovery_prob']}%` (Based on past cycle bounces)"
+        f"📌 *DRAWDOWN SUMMARY*\n"
+        f"  • 📅 *Monthly Drop (30d Peak):* `-{data['monthly_drawdown_pct']:.2f}%` (Peak: `${data['monthly_high']:.6f}`)\n"
+        f"  • 🏆 *3-Yr ATH Drop:* `-{data['ath_drawdown_pct']:.2f}%` (ATH: `${data['ath_price']:.6f}` on `{data['ath_date']}`)\n"
+        f"  • 🌱 *3-Yr ATL Level:* `${data['atl_price']:.6f}` (`+{data['atl_rebound_pct']:.2f}%` from bottom)\n\n"
+        f"📊 *MONTHLY PACING*\n"
+        f"  • 30-Day Avg Price: `${data['monthly_avg_price']:.6f}` (`{data['monthly_pace_pct']:+.2f}%` pace)\n\n"
+        f"⚡ *TECHNICAL CONFLUENCE*\n"
+        f"{conf_text}\n\n"
+        f"🎯 *PROFIT & RECOVERY TARGETS*\n"
+        f"  • 🎯 *+25% Target:* `${t25:.6f}`\n"
+        f"  • 🎯 *+50% Target:* `${t50:.6f}`\n"
+        f"  • 🚀 *Full ATH Rebound:* `${data['ath_price']:.6f}` (`+{ath_gain:.1f}%` Upside)\n\n"
+        f"🔍 *PULLBACK CATALYST & REASON*\n"
+        f"  {data['reason']}\n\n"
+        f"🛡️ *RISK ASSESSMENT*\n"
+        f"  • *Risk Level:* {data['risk_rate']}\n"
+        f"  • *Historical Bounce Rate:* `{data['recovery_prob']}%` probability\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━"
     )
     return msg
 
@@ -608,7 +616,7 @@ def handle_telegram_commands():
 
 def run_pullback_engine():
     print("="*75)
-    print("⚡ CRYPTOPULSE AI v10.1 - 24/7 CLOUD AUTOMATION PULLBACK ENGINE")
+    print("⚡ CRYPTOPULSE AI v10.2 - ENHANCED ALERT LAYOUT PULLBACK ENGINE")
     print("="*75)
     print(f"✅ Telegram Channel Active (Chat ID: {SAVED_CHAT_ID})")
     
@@ -616,11 +624,11 @@ def run_pullback_engine():
     initialize_all_brains()
     
     startup_msg = (
-        "🟢 *CryptoPulse Pullback Engine Live*\n"
-        "🌱 ATH & ATL Tracking Enabled.\n"
-        "🔥 Automated Trending Coin Discovery Active.\n"
-        "📁 Persistent Watchlist Memory Loaded.\n"
-        "📱 Telegram Commands: `/add SUI`, `/delete SUI`, `/list`, `/check PEPE`, `/trending`"
+        "🟢 *CryptoPulse Pullback Engine v10.2 Live*\n"
+        "✨ Alert Layout Upgraded with Yellow Header Badges & Section Cards.\n"
+        "🌱 ATH & ATL Tracking Active.\n"
+        "🔥 Auto Trending Discovery Enabled.\n"
+        "📱 Telegram Commands: `/add SUI`, `/delete SUI`, `/list`, `/check PEPE`"
     )
     send_telegram_msg(SAVED_CHAT_ID, startup_msg)
     print("📲 Startup confirmation sent to Telegram.\n")
@@ -668,7 +676,6 @@ def run_pullback_engine():
         print(summary_df.to_string(index=False))
         print(f"\nSummary: Scanned {len(TARGET_COINS)} coins | Telegram Alerts Sent This Scan: {alerts_sent}")
         
-        # Cloud Execution check: If MAX_SCANS limit is set, exit cleanly after limit reached
         if MAX_SCANS and scan_count >= MAX_SCANS:
             print(f"🏁 Cloud scan run completed ({scan_count} cycles). Exiting cleanly.")
             break
