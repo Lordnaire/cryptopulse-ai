@@ -1,0 +1,42 @@
+name: CryptoPulse AI 24/7 Pullback Engine
+
+on:
+  schedule:
+    # Runs every 30 minutes automatically in the cloud for $0
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI anytime
+
+jobs:
+  run-engine:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Execute Pullback Scanner Cloud Session
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          SAVED_CHAT_ID: ${{ secrets.SAVED_CHAT_ID }}
+          MAX_SCANS: 25 # Runs 25 scan loops (~25 mins), then next scheduled job takes over seamlessly
+        run: |
+          python pump_detector_core.py
+
+      - name: Commit Watchlist Changes (Persistence)
+        if: always()
+        run: |
+          git config --global user.name 'CryptoPulse Bot'
+          git config --global user.email 'bot@cryptopulse.ai'
+          git add watchlist.json || true
+          git commit -m "Auto-update persistent watchlist [skip ci]" || true
+          git push || true
