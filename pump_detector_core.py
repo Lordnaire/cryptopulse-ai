@@ -129,6 +129,14 @@ def calculate_ema(series, span=200):
     """Calculates Exponential Moving Average (EMA)."""
     return series.ewm(span=span, adjust=False).mean()
 
+def calculate_rsi(series, period=14):
+    """Calculates Relative Strength Index (RSI)."""
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
 def fetch_btc_market_climate():
     """
     Market Climate Filter (BTC Trend Check):
@@ -150,7 +158,8 @@ def fetch_btc_market_climate():
 def fetch_3year_historical_data(symbol):
     """
     Fetches ~1,000 daily candles (~2.7 to 3 years of price history).
-    Extracts Historical ATH, ATL, 30-Day Monthly Peak, 200-day EMA, volume absorption, and recovery rate.
+    Extracts Historical ATH & ATH Date, Historical ATL & ATL Date, 
+    30-Day Monthly Peak, 200-day EMA, volume absorption, recovery rate, and RSI divergence.
     """
     try:
         ohlcv = fetch_ohlcv_with_fallback(symbol, timeframe='1d', limit=1000)
@@ -160,12 +169,12 @@ def fetch_3year_historical_data(symbol):
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
         
-        # 1. Historical 3-Year All-Time High (ATH)
+        # 1. Historical 3-Year All-Time High (ATH) & Date
         ath_row = df.loc[df['high'].idxmax()]
         ath_price = float(ath_row['high'])
         ath_date_str = ath_row['date'].strftime('%Y-%m-%d')
 
-        # 2. Historical 3-Year All-Time Low (ATL)
+        # 2. Historical 3-Year All-Time Low (ATL) & Date (ENHANCED IN V11.0)
         atl_row = df.loc[df['low'].idxmin()]
         atl_price = float(atl_row['low'])
         atl_date_str = atl_row['date'].strftime('%Y-%m-%d')
@@ -189,13 +198,19 @@ def fetch_3year_historical_data(symbol):
             if pct_diff <= 3.5:
                 near_200ema = True
 
-        # 5. Whale Dip Absorption Detector (24h volume vs 20d average)
+        # 5. Whale Dip Absorption Detector & Recovery Turning Signals
         vol_20d_avg = float(df['volume'].tail(20).mean())
         latest_volume = float(df.iloc[-1]['volume'])
         volume_surge = (latest_volume / vol_20d_avg) if vol_20d_avg > 0 else 1.0
         whale_absorption = volume_surge >= 1.5
+
+        # 6. RSI Reversal Check (Engine 2 Integration)
+        df['rsi'] = calculate_rsi(df['close'], period=14)
+        latest_rsi = float(df.iloc[-1]['rsi']) if not df['rsi'].isnull().iloc[-1] else 50.0
+        prev_rsi = float(df.iloc[-2]['rsi']) if len(df) > 1 and not df['rsi'].isnull().iloc[-2] else 50.0
+        rsi_reversal_turn = (prev_rsi <= 35.0 and latest_rsi > prev_rsi)
         
-        # 6. Calculate Historical Recovery Probability
+        # 7. Calculate Historical Recovery Probability
         df['peak_20d'] = df['high'].rolling(20, min_periods=1).max()
         df['drawdown_from_peak'] = ((df['peak_20d'] - df['close']) / df['peak_20d']) * 100
         
@@ -230,7 +245,7 @@ def fetch_3year_historical_data(symbol):
             'ath_price': ath_price,
             'ath_date': ath_date_str,
             'atl_price': atl_price,
-            'atl_date': atl_date_str,
+            'atl_date': atl_date_str, # Explicit ATL Date
             'atl_rebound_pct': atl_rebound_pct,
             'monthly_high': monthly_high,
             'monthly_avg_price': monthly_avg_price,
@@ -239,6 +254,8 @@ def fetch_3year_historical_data(symbol):
             'ema_200_price': latest_ema200,
             'whale_absorption': whale_absorption,
             'volume_surge': volume_surge,
+            'rsi': latest_rsi,
+            'rsi_reversal_turn': rsi_reversal_turn,
             'historical_drop_events': total_events,
             'recovery_probability_pct': max(min(recovery_prob_pct, 95), 15)
         }
@@ -261,6 +278,8 @@ def fetch_3year_historical_data(symbol):
             'ema_200_price': 0.0,
             'whale_absorption': False,
             'volume_surge': 1.0,
+            'rsi': 50.0,
+            'rsi_reversal_turn': False,
             'historical_drop_events': 0,
             'recovery_probability_pct': 50
         }
@@ -307,7 +326,7 @@ def auto_discover_trending_coins():
             )
             send_telegram_msg(SAVED_CHAT_ID, msg)
             added_count += 1
-            time.sleep(0.2)
+            time.sleep(1.5) # Anti-spam stagger
             
         if added_count == 0:
             print("ℹ️ Discovery Scan Complete: No new qualifying trending coins found.")
@@ -428,7 +447,7 @@ def generate_pullback_report(symbol):
         'ath_date': brain['ath_date'],
         'ath_drawdown_pct': ath_drawdown_pct,
         'atl_price': atl_price,
-        'atl_date': brain['atl_date'],
+        'atl_date': brain['atl_date'], # Explicit ATL Date
         'atl_rebound_pct': atl_rebound_pct,
         'monthly_high': monthly_high,
         'monthly_drawdown_pct': monthly_drawdown_pct,
@@ -437,6 +456,8 @@ def generate_pullback_report(symbol):
         'near_200ema': brain['near_200ema'],
         'ema_200_price': brain['ema_200_price'],
         'whale_absorption': brain['whale_absorption'],
+        'rsi': brain.get('rsi', 50.0),
+        'rsi_reversal_turn': brain.get('rsi_reversal_turn', False),
         'volume_surge': brain['volume_surge'],
         'market_climate': market_climate,
         'reason': reason,
@@ -448,8 +469,12 @@ def format_telegram_alert(data):
     """Formats full pullback alert report for Telegram broadcast with enhanced readability."""
     max_drop = max(data['monthly_drawdown_pct'], data['ath_drawdown_pct'])
     
-    # Title & Color Badge Header
-    if max_drop >= 70:
+    # Check for Prime Accumulation Setup (Confluence of Deep Dip + Whale Absorption + Reversal)
+    is_prime_setup = max_drop >= 30.0 and data.get('whale_absorption') and data.get('rsi_reversal_turn')
+    
+    if is_prime_setup:
+        header_badge = "👑 🚀 PRIME ACCUMULATION SETUP (Pullback + Reversal)"
+    elif max_drop >= 70:
         header_badge = "🟥 🚨 EXTREME PULLBACK ALERT (-70%+)"
     elif max_drop >= 50:
         header_badge = "🟨 ⚠️ MAJOR PULLBACK ALERT (-50%+)"
@@ -465,6 +490,8 @@ def format_telegram_alert(data):
         confluences.append(f"🧱 Sitting near 200-Day EMA Key Support (`${data['ema_200_price']:.4f}`)")
     if data.get('whale_absorption'):
         confluences.append(f"🐋 Whale Dip Absorption (`{data['volume_surge']:.1f}x` Volume Surge)")
+    if data.get('rsi_reversal_turn'):
+        confluences.append(f"🔥 RSI Bullish Turning Point (`RSI: {data['rsi']:.1f}`)")
 
     conf_text = "\n".join([f"  • {c}" for c in confluences]) if confluences else "  • Standard Dip Level"
 
@@ -478,7 +505,7 @@ def format_telegram_alert(data):
         f"📌 *DRAWDOWN SUMMARY*\n"
         f"  • 📅 *Monthly Drop (30d Peak):* `-{data['monthly_drawdown_pct']:.2f}%` (Peak: `${data['monthly_high']:.6f}`)\n"
         f"  • 🏆 *3-Yr ATH Drop:* `-{data['ath_drawdown_pct']:.2f}%` (ATH: `${data['ath_price']:.6f}` on `{data['ath_date']}`)\n"
-        f"  • 🌱 *3-Yr ATL Level:* `${data['atl_price']:.6f}` (`+{data['atl_rebound_pct']:.2f}%` from bottom)\n\n"
+        f"  • 🌱 *3-Yr ATL Level:* `${data['atl_price']:.6f}` (`+{data['atl_rebound_pct']:.2f}%` from bottom on `{data['atl_date']}`)\n\n"
         f"📊 *MONTHLY PACING*\n"
         f"  • 30-Day Avg Price: `${data['monthly_avg_price']:.6f}` (`{data['monthly_pace_pct']:+.2f}%` pace)\n\n"
         f"⚡ *TECHNICAL CONFLUENCE*\n"
@@ -586,7 +613,8 @@ def handle_telegram_commands():
                         brain = COIN_BRAIN_CACHE.get(c, {})
                         ath = brain.get('ath_price', 0)
                         atl = brain.get('atl_price', 0)
-                        items.append(f"• `{c}` (ATH: `${ath:.4f}` | ATL: `${atl:.4f}`)")
+                        atl_date = brain.get('atl_date', 'Unknown')
+                        items.append(f"• `{c}` (ATH: `${ath:.4f}` | ATL: `${atl:.4f}` on `{atl_date}`)")
                     msg = f"📋 *Active Watchlist ({len(TARGET_COINS)} Coins):*\n\n" + "\n".join(items)
                     send_telegram_msg(chat_id, msg)
 
@@ -605,7 +633,7 @@ def handle_telegram_commands():
                             max_drop = max(report['monthly_drawdown_pct'], report['ath_drawdown_pct'])
                             if max_drop >= MIN_ALERT_DRAWDOWN_PCT:
                                 send_telegram_msg(chat_id, format_telegram_alert(report))
-                                time.sleep(0.3)
+                                time.sleep(1.5) # Anti-spam stagger buffer
                                 
                 elif text.startswith("/trending"):
                     send_telegram_msg(chat_id, "🔥 Manual trigger: Scanning market for top trending volume coins...")
@@ -616,7 +644,7 @@ def handle_telegram_commands():
 
 def run_pullback_engine():
     print("="*75)
-    print("⚡ CRYPTOPULSE AI v10.2 - ENHANCED ALERT LAYOUT PULLBACK ENGINE")
+    print("⚡ CRYPTOPULSE AI v11.0 - UNIFIED PULLBACK & RECOVERY ENGINE")
     print("="*75)
     print(f"✅ Telegram Channel Active (Chat ID: {SAVED_CHAT_ID})")
     
@@ -624,11 +652,10 @@ def run_pullback_engine():
     initialize_all_brains()
     
     startup_msg = (
-        "🟢 *CryptoPulse Pullback Engine v10.2 Live*\n"
-        "✨ Alert Layout Upgraded with Yellow Header Badges & Section Cards.\n"
-        "🌱 ATH & ATL Tracking Active.\n"
-        "🔥 Auto Trending Discovery Enabled.\n"
-        "📱 Telegram Commands: `/add SUI`, `/delete SUI`, `/list`, `/check PEPE`"
+        "🟢 *CryptoPulse Engine v11.0 Live*\n"
+        "🌱 ATH & Explicit ATL Date Tracking Active.\n"
+        "👑 Prime Accumulation Confluence Engine Enabled.\n"
+        "📱 Commands: `/add SUI`, `/delete SUI`, `/list`, `/check PEPE`, `/trending`"
     )
     send_telegram_msg(SAVED_CHAT_ID, startup_msg)
     print("📲 Startup confirmation sent to Telegram.\n")
@@ -661,6 +688,7 @@ def run_pullback_engine():
                 'Price ($)': f"{report['current_price']:.6f}",
                 'ATH ($)': f"{report['ath_price']:.4f}",
                 'ATL ($)': f"{report['atl_price']:.4f}",
+                'ATL Date': report['atl_date'],
                 'Monthly Drop': f"-{report['monthly_drawdown_pct']:.1f}%",
                 'ATH Drop': f"-{report['ath_drawdown_pct']:.1f}%",
                 'Status': status_str
@@ -669,6 +697,7 @@ def run_pullback_engine():
             if should_alert:
                 send_telegram_msg(SAVED_CHAT_ID, format_telegram_alert(report))
                 alerts_sent += 1
+                time.sleep(1.5) # Anti-spam delay between multiple concurrent alerts
                 
             time.sleep(0.12)
             
