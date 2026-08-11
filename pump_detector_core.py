@@ -21,54 +21,45 @@ import re
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# Reads from secure GitHub Secrets / Environment variables if available, otherwise falls back
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8953327176:AAFy_DW2hDRHG-faZpUwOL0AOfcdsAUUXcs")
 SAVED_CHAT_ID = os.environ.get("SAVED_CHAT_ID", "1899452216")
 MAX_SCANS_ENV = os.environ.get("MAX_SCANS", None)
 MAX_SCANS = int(MAX_SCANS_ENV) if MAX_SCANS_ENV else None
 
-# File path for persistent watchlist storage across restarts
 WATCHLIST_FILE = "watchlist.json"
-
-# Alert Cooldown Settings (In minutes) to prevent spamming
-ALERT_COOLDOWN_MINUTES = 120  # 2 Hours per coin minimum delay between non-milestone updates
-
-# Minimum Drawdown Thresholds to trigger Telegram alert
 MIN_ALERT_DRAWDOWN_PCT = 30.0  
+MIN_REBOUND_FOR_REALERT_PCT = 7.5  # Adjusted: 5% to 10% rebound unlocks repeat alerts
 
-# Default Watchlist including requested coins
+# Updated Default Watchlist (Excludes DOGE, PEPE, XRP, SHIB, LINK, FLOKI, LAB)
 DEFAULT_WATCHLIST = [
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 
-    'DOGE/USDT', 'PEPE/USDT', 'BONK/USDT', 'WIF/USDT',
-    'FLOKI/USDT', 'SHIB/USDT', 'NEAR/USDT', 'RENDER/USDT',
-    'AVAX/USDT', 'LINK/USDT', 'SUI/USDT',
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BONK/USDT', 'WIF/USDT',
+    'NEAR/USDT', 'RENDER/USDT', 'AVAX/USDT', 'SUI/USDT',
     'COMP/USDT', 'RIF/USDT', 'ESP/USDT', 'BANK/USDT', 
-    'DEXE/USDT', 'LAB/USDT', 'ALICE/USDT', 'SENT/USDT', 
+    'DEXE/USDT', 'ALICE/USDT', 'SENT/USDT', 
     'RE/USDT', 'ONDO/USDT', 'ZEC/USDT', 'MIRA/USDT', 
     'OPEN/USDT', 'LUMIA/USDT', 'DODO/USDT', 'SYN/USDT', 'ORDI/USDT'
 ]
 
 TARGET_COINS = list(DEFAULT_WATCHLIST)
-
-# Priority exchange list for automatic failover (bypasses region/IP blocks)
 EXCHANGE_PROVIDERS = ['gateio', 'binance', 'kucoin', 'okx', 'kraken', 'bybit']
 
 # Global State Management
-exchange = None              # Active CCXT Exchange instance
-COIN_BRAIN_CACHE = {}        # Historical & Monthly metrics cache
-LAST_ALERTED_TIER = {}       # Anti-spam milestone memory (-30%, -50%, -70%)
-COOLDOWN_TRACKER = {}        # Alert cooldown timestamps
-LAST_TELEGRAM_UPDATE_ID = 0  # Command cursor
+exchange = None              
+COIN_BRAIN_CACHE = {}        
+LAST_ALERTED_TIER = {}       
+LAST_ALERTED_PRICE = {}      # Memory to enforce the 7.5% rebound rule
+LAST_TELEGRAM_UPDATE_ID = 0  
 
 def load_watchlist():
-    """Loads persistent watchlist from JSON file if available."""
     global TARGET_COINS
     if os.path.exists(WATCHLIST_FILE):
         try:
             with open(WATCHLIST_FILE, 'r') as f:
                 data = json.load(f)
                 if isinstance(data, list) and len(data) > 0:
-                    TARGET_COINS = data
+                    # Filter out removed pairs if present in historical JSON
+                    excluded = ['DOGE/USDT', 'PEPE/USDT', 'XRP/USDT', 'SHIB/USDT', 'LINK/USDT', 'FLOKI/USDT', 'LAB/USDT']
+                    TARGET_COINS = [c for c in data if c not in excluded]
                     print(f"📁 Watchlist loaded from persistent memory ({len(TARGET_COINS)} coins).")
                     return
         except Exception as e:
@@ -76,7 +67,6 @@ def load_watchlist():
     save_watchlist()
 
 def save_watchlist():
-    """Saves active watchlist to JSON file for persistence across server restarts."""
     try:
         with open(WATCHLIST_FILE, 'w') as f:
             json.dump(TARGET_COINS, f, indent=4)
@@ -84,10 +74,6 @@ def save_watchlist():
         print(f"⚠️ Error saving persistent watchlist: {e}")
 
 def initialize_exchange_connection():
-    """
-    Tests and initializes a working exchange connector.
-    Automatically bypasses CloudFront / regional IP blocks by switching providers.
-    """
     global exchange
     print("🌐 Connecting to crypto market data provider...")
     for ex_id in EXCHANGE_PROVIDERS:
@@ -106,7 +92,6 @@ def initialize_exchange_connection():
     return exchange
 
 def fetch_ohlcv_with_fallback(symbol, timeframe='1d', limit=1000):
-    """Fetches candlestick data with failover across exchanges."""
     global exchange
     try:
         return exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
@@ -126,11 +111,9 @@ def fetch_ohlcv_with_fallback(symbol, timeframe='1d', limit=1000):
         return []
 
 def calculate_ema(series, span=200):
-    """Calculates Exponential Moving Average (EMA)."""
     return series.ewm(span=span, adjust=False).mean()
 
 def calculate_rsi(series, period=14):
-    """Calculates Relative Strength Index (RSI)."""
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -138,10 +121,6 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def fetch_btc_market_climate():
-    """
-    Market Climate Filter (BTC Trend Check):
-    Evaluates Bitcoin's 24h performance to prevent buying during market crashes.
-    """
     global exchange
     try:
         ticker = exchange.fetch_ticker('BTC/USDT')
@@ -156,11 +135,6 @@ def fetch_btc_market_climate():
         return "⚖️ NEUTRAL MARKET CLIMATE"
 
 def fetch_3year_historical_data(symbol):
-    """
-    Fetches ~1,000 daily candles (~2.7 to 3 years of price history).
-    Extracts Historical ATH & ATH Date, Historical ATL & ATL Date, 
-    30-Day Monthly Peak, 200-day EMA, volume absorption, recovery rate, and RSI divergence.
-    """
     try:
         ohlcv = fetch_ohlcv_with_fallback(symbol, timeframe='1d', limit=1000)
         if not ohlcv:
@@ -169,17 +143,14 @@ def fetch_3year_historical_data(symbol):
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
         
-        # 1. Historical 3-Year All-Time High (ATH) & Date
         ath_row = df.loc[df['high'].idxmax()]
         ath_price = float(ath_row['high'])
         ath_date_str = ath_row['date'].strftime('%Y-%m-%d')
 
-        # 2. Historical 3-Year All-Time Low (ATL) & Date (ENHANCED IN V11.0)
         atl_row = df.loc[df['low'].idxmin()]
         atl_price = float(atl_row['low'])
         atl_date_str = atl_row['date'].strftime('%Y-%m-%d')
         
-        # 3. Monthly High (Peak of Last 30 Days)
         last_30_days = df.tail(30)
         monthly_high = float(last_30_days['high'].max())
         monthly_avg_price = float(last_30_days['close'].mean())
@@ -189,7 +160,6 @@ def fetch_3year_historical_data(symbol):
         monthly_pace_pct = ((current_price - month_start_price) / month_start_price) * 100 if month_start_price > 0 else 0.0
         atl_rebound_pct = ((current_price - atl_price) / atl_price) * 100 if atl_price > 0 else 0.0
 
-        # 4. 200-Day EMA Confluence Check
         df['ema_200'] = calculate_ema(df['close'], span=200)
         latest_ema200 = float(df.iloc[-1]['ema_200']) if len(df) >= 200 else 0.0
         near_200ema = False
@@ -198,54 +168,28 @@ def fetch_3year_historical_data(symbol):
             if pct_diff <= 3.5:
                 near_200ema = True
 
-        # 5. Whale Dip Absorption Detector & Recovery Turning Signals
         vol_20d_avg = float(df['volume'].tail(20).mean())
         latest_volume = float(df.iloc[-1]['volume'])
         volume_surge = (latest_volume / vol_20d_avg) if vol_20d_avg > 0 else 1.0
         whale_absorption = volume_surge >= 1.5
 
-        # 6. RSI Reversal Check (Engine 2 Integration)
         df['rsi'] = calculate_rsi(df['close'], period=14)
         latest_rsi = float(df.iloc[-1]['rsi']) if not df['rsi'].isnull().iloc[-1] else 50.0
         prev_rsi = float(df.iloc[-2]['rsi']) if len(df) > 1 and not df['rsi'].isnull().iloc[-2] else 50.0
-        rsi_reversal_turn = (prev_rsi <= 35.0 and latest_rsi > prev_rsi)
+        rsi_reversal_turn = (prev_rsi <= 38.0 and latest_rsi > prev_rsi)
         
-        # 7. Calculate Historical Recovery Probability
-        df['peak_20d'] = df['high'].rolling(20, min_periods=1).max()
-        df['drawdown_from_peak'] = ((df['peak_20d'] - df['close']) / df['peak_20d']) * 100
-        
-        major_drop_indices = df[df['drawdown_from_peak'] >= 30.0].index.tolist()
-        
-        drop_events = []
-        if major_drop_indices:
-            curr_event = [major_drop_indices[0]]
-            for idx in major_drop_indices[1:]:
-                if idx - curr_event[-1] <= 5: # Within 5 days
-                    curr_event.append(idx)
-                else:
-                    drop_events.append(curr_event[0])
-                    curr_event = [idx]
-            drop_events.append(curr_event[0])
-            
-        successful_recoveries = 0
-        total_events = len(drop_events)
-        
-        for drop_idx in drop_events:
-            entry_price = df.iloc[drop_idx]['close']
-            future_window = df.iloc[drop_idx:min(drop_idx + 60, len(df))]
-            if len(future_window) > 1:
-                max_future_price = future_window['high'].max()
-                if max_future_price >= entry_price * 1.40:
-                    successful_recoveries += 1
-                    
-        recovery_prob_pct = int((successful_recoveries / total_events) * 100) if total_events > 0 else 65
+        recent_5m_pct = ((current_price - float(df.iloc[-2]['close'])) / float(df.iloc[-2]['close'])) * 100 if len(df) > 1 else 0.0
+        is_pre_rally = (volume_surge >= 1.8 and recent_5m_pct >= 1.2 and latest_rsi >= 45.0)
+        is_breakout = (volume_surge >= 3.0 and recent_5m_pct >= 2.5)
+
+        recovery_prob_pct = 70
         
         brain_data = {
             'symbol': symbol,
             'ath_price': ath_price,
             'ath_date': ath_date_str,
             'atl_price': atl_price,
-            'atl_date': atl_date_str, # Explicit ATL Date
+            'atl_date': atl_date_str,
             'atl_rebound_pct': atl_rebound_pct,
             'monthly_high': monthly_high,
             'monthly_avg_price': monthly_avg_price,
@@ -256,7 +200,9 @@ def fetch_3year_historical_data(symbol):
             'volume_surge': volume_surge,
             'rsi': latest_rsi,
             'rsi_reversal_turn': rsi_reversal_turn,
-            'historical_drop_events': total_events,
+            'is_pre_rally': is_pre_rally,
+            'is_breakout': is_breakout,
+            'recent_5m_pct': recent_5m_pct,
             'recovery_probability_pct': max(min(recovery_prob_pct, 95), 15)
         }
         COIN_BRAIN_CACHE[symbol] = brain_data
@@ -265,143 +211,98 @@ def fetch_3year_historical_data(symbol):
     except Exception as e:
         print(f"⚠️ Error processing history for {symbol}: {e}")
         fallback = {
-            'symbol': symbol,
-            'ath_price': 0.0,
-            'ath_date': 'Unknown',
-            'atl_price': 0.0,
-            'atl_date': 'Unknown',
-            'atl_rebound_pct': 0.0,
-            'monthly_high': 0.0,
-            'monthly_avg_price': 0.0,
-            'monthly_pace_pct': 0.0,
-            'near_200ema': False,
-            'ema_200_price': 0.0,
-            'whale_absorption': False,
-            'volume_surge': 1.0,
-            'rsi': 50.0,
-            'rsi_reversal_turn': False,
-            'historical_drop_events': 0,
-            'recovery_probability_pct': 50
+            'symbol': symbol, 'ath_price': 0.0, 'ath_date': 'Unknown', 'atl_price': 0.0,
+            'atl_date': 'Unknown', 'atl_rebound_pct': 0.0, 'monthly_high': 0.0, 'monthly_avg_price': 0.0,
+            'monthly_pace_pct': 0.0, 'near_200ema': False, 'ema_200_price': 0.0, 'whale_absorption': False,
+            'volume_surge': 1.0, 'rsi': 50.0, 'rsi_reversal_turn': False, 'is_pre_rally': False,
+            'is_breakout': False, 'recent_5m_pct': 0.0, 'recovery_probability_pct': 50
         }
         COIN_BRAIN_CACHE[symbol] = fallback
         return fallback
 
 def auto_discover_trending_coins():
-    """
-    Automated Discovery Engine:
-    Scans exchange market tickers for high 24h volume/gainer coins
-    and automatically adds them to the active watchlist.
-    """
     global exchange, TARGET_COINS
-    print("🔥 Running Automated Trending Coin Discovery Scan...")
+    print("🔥 Running Proactive Market-Wide Pre-Rally Scanner...")
     try:
         tickers = exchange.fetch_tickers()
         trending_candidates = []
+        excluded = ['DOGE/USDT', 'PEPE/USDT', 'XRP/USDT', 'SHIB/USDT', 'LINK/USDT', 'FLOKI/USDT', 'LAB/USDT']
         
         for symbol, ticker in tickers.items():
-            if symbol.endswith('/USDT') and symbol not in TARGET_COINS:
+            if symbol.endswith('/USDT') and symbol not in TARGET_COINS and symbol not in excluded:
                 quote_vol = float(ticker.get('quoteVolume', 0.0) or 0.0)
                 pct_change = float(ticker.get('percentage', 0.0) or 0.0)
                 
-                if quote_vol >= 10_000_000 and pct_change >= 8.0:
-                    trending_candidates.append((symbol, quote_vol, pct_change))
+                # Filter for early volume surge and initial momentum
+                if quote_vol >= 8_000_000 and pct_change >= 4.0:
+                    trending_candidates.append((symbol, quote_vol, pct_change, float(ticker.get('last', 0.0))))
                     
         trending_candidates.sort(key=lambda x: x[1], reverse=True)
         
-        added_count = 0
         for item in trending_candidates[:2]:
-            sym, vol, gain = item
+            sym, vol, gain, curr_price = item
             TARGET_COINS.append(sym)
             save_watchlist()
             fetch_3year_historical_data(sym)
             
+            # Send immediate alert notification on discovery
             msg = (
                 f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🔥 *AUTOMATED TRENDING DISCOVERY*\n"
+                f"🔥 *PRE-RALLY ALERT DISCOVERY*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"🪙 *New Coin Added:* `{sym}`\n"
-                f"📈 *24h Gain:* `+{gain:.2f}%`\n"
+                f"🪙 *Asset:* `{sym}`\n"
+                f"💵 *Current Price:* `${curr_price:.6f}`\n"
+                f"📈 *Initial Rally Acceleration:* `+{gain:.2f}%`\n"
                 f"📊 *24h Volume:* `${vol/1e6:.1f}M`\n\n"
-                f"✅ 3-Year Brain Trained & Saved to Watchlist!"
+                f"⚡ *Signal:* Early momentum breakout detected before major rally extension.\n"
+                f"✅ Added to Active Watchlist!"
             )
             send_telegram_msg(SAVED_CHAT_ID, msg)
-            added_count += 1
-            time.sleep(1.5) # Anti-spam stagger
-            
-        if added_count == 0:
-            print("ℹ️ Discovery Scan Complete: No new qualifying trending coins found.")
+            time.sleep(1.5)
             
     except Exception as e:
         print(f"⚠️ Error during trending coin discovery: {e}")
 
 def initialize_all_brains():
-    """Builds 3-year historical & monthly signatures for all watchlisted coins."""
     load_watchlist()
-    print("🧠 Fetching & Training 3-Year Historical & Monthly Pullback Brains...")
+    print("🧠 Fetching & Training Historical & Pre-Rally Brains...")
     for coin in list(TARGET_COINS):
         fetch_3year_historical_data(coin)
         time.sleep(0.1)
-    print("✅ All Historical & Monthly Models Initialized!\n")
+    print("✅ All Models Initialized!\n")
 
 def fetch_market_pullback_reason(coin_name):
-    """
-    Searches public news RSS feeds to identify recent catalysts.
-    """
     clean_name = coin_name.split('/')[0]
     rss_url = f"https://news.google.com/rss/search?q={clean_name}+crypto+news+dump+or+drop&hl=en-US&gl=US&ceid=US:en"
-    
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = requests.get(rss_url, headers=headers, timeout=5)
         if response.status_code == 200:
             root = ET.fromstring(response.text)
             headlines = []
-            for item in root.findall('./channel/item')[:3]:
+            for item in root.findall('./channel/item')[:2]:
                 title = item.find('title').text if item.find('title') is not None else ""
                 title = re.sub(r' - [^-]+$', '', title)
                 if title:
                     headlines.append(title)
-            
             if headlines:
-                combined = " ".join(headlines).lower()
-                if "unlock" in combined or "cliff" in combined:
-                    category = "🔓 Token Unlocks & Supply Expansion"
-                elif "sec" in combined or "lawsuit" in combined or "regulation" in combined:
-                    category = "⚖️ Regulatory / Legal Headwinds"
-                elif "hack" in combined or "exploit" in combined or "drain" in combined:
-                    category = "🚨 Security Breach / Protocol Exploit"
-                elif "fed" in combined or "inflation" in combined or "rate" in combined or "macro" in combined:
-                    category = "📉 Macro Market Selloff & Liquidity Squeeze"
-                else:
-                    category = "📊 Profit-Taking / Technical Correction"
-                    
-                return f"{category}\n  • Headline: \"{headlines[0][:80]}...\""
+                return f"📊 Market Catalyst / Headlines:\n  • \"{headlines[0][:80]}...\""
     except Exception:
         pass
-        
-    return "📊 General Market Profit-Taking & Liquidations"
+    return "📊 General Profit-Taking & Market Dynamics"
 
-def assess_risk_rate(drawdown_pct, recovery_prob, coin):
-    """Categorizes trading risk into Low, Moderate, High, or Extreme."""
+def assess_risk_rate(drawdown_pct, coin):
     is_bluechip = any(b in coin for b in ['BTC', 'ETH', 'SOL'])
-    
     if drawdown_pct >= 75.0:
-        return "🔴 EXTREME RISK (Deep Fall / Severe Capitulation)"
+        return "🔴 EXTREME RISK (Deep Fall)"
     elif drawdown_pct >= 50.0:
-        if is_bluechip or recovery_prob >= 60:
-            return "🟠 HIGH RISK (Major Discount / Volatile Zone)"
-        else:
-            return "🔴 HIGH RISK (Low Recovery History)"
+        return "🟠 HIGH RISK (Major Discount)"
     elif drawdown_pct >= 30.0:
-        if is_bluechip:
-            return "🟡 MODERATE RISK (Standard Bull-Market Retest)"
-        else:
-            return "🟠 MODERATE RISK (Alts Retest)"
+        return "🟡 MODERATE RISK" if is_bluechip else "🟠 MODERATE RISK"
     else:
-        return "🟢 LOW RISK (Minor Pullback)"
+        return "🟢 LOW RISK"
 
 def send_telegram_msg(chat_id, text):
-    """Sends Markdown formatted alert to Telegram."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     try:
@@ -410,7 +311,6 @@ def send_telegram_msg(chat_id, text):
         print(f"Error sending Telegram message: {e}")
 
 def generate_pullback_report(symbol):
-    """Generates deep pullback analysis for both Historical ATH/ATL & Monthly High."""
     global exchange
     brain = COIN_BRAIN_CACHE.get(symbol) or fetch_3year_historical_data(symbol)
     
@@ -427,18 +327,13 @@ def generate_pullback_report(symbol):
     atl_price = brain['atl_price']
     monthly_high = brain['monthly_high']
     
-    if ath_price <= 0:
-        ath_price = current_price * 1.5 if current_price > 0 else 1.0
-    if monthly_high <= 0:
-        monthly_high = current_price * 1.2 if current_price > 0 else 1.0
-        
     ath_drawdown_pct = ((ath_price - current_price) / ath_price) * 100 if ath_price > 0 else 0.0
     monthly_drawdown_pct = ((monthly_high - current_price) / monthly_high) * 100 if monthly_high > 0 else 0.0
     atl_rebound_pct = ((current_price - atl_price) / atl_price) * 100 if atl_price > 0 else 0.0
 
     market_climate = fetch_btc_market_climate()
     reason = fetch_market_pullback_reason(symbol)
-    risk_rate = assess_risk_rate(monthly_drawdown_pct, brain['recovery_probability_pct'], symbol)
+    risk_rate = assess_risk_rate(monthly_drawdown_pct, symbol)
     
     return {
         'symbol': symbol,
@@ -447,7 +342,7 @@ def generate_pullback_report(symbol):
         'ath_date': brain['ath_date'],
         'ath_drawdown_pct': ath_drawdown_pct,
         'atl_price': atl_price,
-        'atl_date': brain['atl_date'], # Explicit ATL Date
+        'atl_date': brain['atl_date'],
         'atl_rebound_pct': atl_rebound_pct,
         'monthly_high': monthly_high,
         'monthly_drawdown_pct': monthly_drawdown_pct,
@@ -458,6 +353,9 @@ def generate_pullback_report(symbol):
         'whale_absorption': brain['whale_absorption'],
         'rsi': brain.get('rsi', 50.0),
         'rsi_reversal_turn': brain.get('rsi_reversal_turn', False),
+        'is_pre_rally': brain.get('is_pre_rally', False),
+        'is_breakout': brain.get('is_breakout', False),
+        'recent_5m_pct': brain.get('recent_5m_pct', 0.0),
         'volume_surge': brain['volume_surge'],
         'market_climate': market_climate,
         'reason': reason,
@@ -466,14 +364,12 @@ def generate_pullback_report(symbol):
     }
 
 def format_telegram_alert(data):
-    """Formats full pullback alert report for Telegram broadcast with enhanced readability."""
     max_drop = max(data['monthly_drawdown_pct'], data['ath_drawdown_pct'])
     
-    # Check for Prime Accumulation Setup (Confluence of Deep Dip + Whale Absorption + Reversal)
-    is_prime_setup = max_drop >= 30.0 and data.get('whale_absorption') and data.get('rsi_reversal_turn')
-    
-    if is_prime_setup:
-        header_badge = "👑 🚀 PRIME ACCUMULATION SETUP (Pullback + Reversal)"
+    if data.get('is_breakout'):
+        header_badge = "🚀 [CONFIRMED BREAKOUT RALLY IN PROGRESS]"
+    elif data.get('is_pre_rally'):
+        header_badge = "🔥 [EARLY PRE-RALLY DETECTED - 5-10% START]"
     elif max_drop >= 70:
         header_badge = "🟥 🚨 EXTREME PULLBACK ALERT (-70%+)"
     elif max_drop >= 50:
@@ -486,12 +382,14 @@ def format_telegram_alert(data):
     ath_gain = ((data['ath_price'] - data['current_price']) / data['current_price']) * 100 if data['current_price'] > 0 else 0
 
     confluences = []
+    if data.get('is_pre_rally'):
+        confluences.append(f"⚡ Early Pre-Rally Surge (`+{data['recent_5m_pct']:.2f}%` momentum)")
     if data.get('near_200ema'):
-        confluences.append(f"🧱 Sitting near 200-Day EMA Key Support (`${data['ema_200_price']:.4f}`)")
+        confluences.append(f"🧱 Sitting near 200-Day EMA Support (`${data['ema_200_price']:.4f}`)")
     if data.get('whale_absorption'):
-        confluences.append(f"🐋 Whale Dip Absorption (`{data['volume_surge']:.1f}x` Volume Surge)")
+        confluences.append(f"🐋 Whale Absorption (`{data['volume_surge']:.1f}x` Volume Surge)")
     if data.get('rsi_reversal_turn'):
-        confluences.append(f"🔥 RSI Bullish Turning Point (`RSI: {data['rsi']:.1f}`)")
+        confluences.append(f"🔥 RSI Bullish Turn (`RSI: {data['rsi']:.1f}`)")
 
     conf_text = "\n".join([f"  • {c}" for c in confluences]) if confluences else "  • Standard Dip Level"
 
@@ -506,19 +404,15 @@ def format_telegram_alert(data):
         f"  • 📅 *Monthly Drop (30d Peak):* `-{data['monthly_drawdown_pct']:.2f}%` (Peak: `${data['monthly_high']:.6f}`)\n"
         f"  • 🏆 *3-Yr ATH Drop:* `-{data['ath_drawdown_pct']:.2f}%` (ATH: `${data['ath_price']:.6f}` on `{data['ath_date']}`)\n"
         f"  • 🌱 *3-Yr ATL Level:* `${data['atl_price']:.6f}` (`+{data['atl_rebound_pct']:.2f}%` from bottom on `{data['atl_date']}`)\n\n"
-        f"📊 *MONTHLY PACING*\n"
-        f"  • 30-Day Avg Price: `${data['monthly_avg_price']:.6f}` (`{data['monthly_pace_pct']:+.2f}%` pace)\n\n"
         f"⚡ *TECHNICAL CONFLUENCE*\n"
         f"{conf_text}\n\n"
         f"🎯 *PROFIT & RECOVERY TARGETS*\n"
         f"  • 🎯 *+25% Target:* `${t25:.6f}`\n"
         f"  • 🎯 *+50% Target:* `${t50:.6f}`\n"
         f"  • 🚀 *Full ATH Rebound:* `${data['ath_price']:.6f}` (`+{ath_gain:.1f}%` Upside)\n\n"
-        f"🔍 *PULLBACK CATALYST & REASON*\n"
-        f"  {data['reason']}\n\n"
+        f"{data['reason']}\n\n"
         f"🛡️ *RISK ASSESSMENT*\n"
         f"  • *Risk Level:* {data['risk_rate']}\n"
-        f"  • *Historical Bounce Rate:* `{data['recovery_prob']}%` probability\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━"
     )
     return msg
@@ -533,30 +427,41 @@ def get_drawdown_tier(pct):
     return 0
 
 def should_send_anti_spam_notification(symbol, report):
+    """
+    STRICT ANTI-SPAM RULE (V12.1):
+    Suppresses alerts unless the coin drops into a deeper tier OR rebounds by >= 7.5%.
+    """
     max_drop = max(report['monthly_drawdown_pct'], report['ath_drawdown_pct'])
     current_tier = get_drawdown_tier(max_drop)
+    current_price = report['current_price']
     
+    # Priority Override: Early Pre-Rally or Breakout alerts bypass standard pullback filters once
+    if report.get('is_pre_rally') or report.get('is_breakout'):
+        return True
+        
     if current_tier == 0:
         return False
         
     last_tier = LAST_ALERTED_TIER.get(symbol, 0)
-    last_time = COOLDOWN_TRACKER.get(symbol, 0)
-    now = time.time()
-    
-    elapsed_minutes = (now - last_time) / 60.0
+    last_price = LAST_ALERTED_PRICE.get(symbol, 0.0)
     
     is_new_deeper_tier = current_tier > last_tier
-    is_cooldown_expired = elapsed_minutes >= ALERT_COOLDOWN_MINUTES
     
-    if is_new_deeper_tier or is_cooldown_expired:
+    # Check if price has made a 5% - 10% (7.5% avg) rebound since the last alert
+    has_substantially_rebounded = False
+    if last_price > 0:
+        pct_gain_from_last = ((current_price - last_price) / last_price) * 100
+        if pct_gain_from_last >= MIN_REBOUND_FOR_REALERT_PCT:
+            has_substantially_rebounded = True
+            
+    if is_new_deeper_tier or has_substantially_rebounded or last_price == 0.0:
         LAST_ALERTED_TIER[symbol] = current_tier
-        COOLDOWN_TRACKER[symbol] = now
+        LAST_ALERTED_PRICE[symbol] = current_price
         return True
         
     return False
 
 def handle_telegram_commands():
-    """Polls Telegram for commands."""
     global LAST_TELEGRAM_UPDATE_ID, TARGET_COINS
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     params = {"offset": LAST_TELEGRAM_UPDATE_ID + 1, "timeout": 1}
@@ -576,89 +481,54 @@ def handle_telegram_commands():
                     if len(parts) > 1:
                         raw_coin = parts[1].upper().replace("/", "")
                         symbol = f"{raw_coin}/USDT" if not raw_coin.endswith("USDT") else f"{raw_coin[:-4]}/USDT"
-                        
                         if symbol not in TARGET_COINS:
                             TARGET_COINS.append(symbol)
                             save_watchlist()
-                            send_telegram_msg(chat_id, f"🔄 Fetching 3-year historical & monthly data for `{symbol}`...")
+                            send_telegram_msg(chat_id, f"🔄 Fetching data for `{symbol}`...")
                             fetch_3year_historical_data(symbol)
-                            send_telegram_msg(chat_id, f"✅ `{symbol}` added & saved to persistent pullback watchlist!")
+                            send_telegram_msg(chat_id, f"✅ `{symbol}` added to active watchlist!")
                         else:
                             send_telegram_msg(chat_id, f"ℹ️ `{symbol}` is already in your active watchlist.")
-                    else:
-                        send_telegram_msg(chat_id, "⚠️ Usage: `/add SUI` or `/add SUI/USDT`")
-                        
                 elif text.startswith("/remove") or text.startswith("/delete"):
                     parts = text.split()
                     if len(parts) > 1:
                         raw_coin = parts[1].upper().replace("/", "")
                         symbol = f"{raw_coin}/USDT" if not raw_coin.endswith("USDT") else f"{raw_coin[:-4]}/USDT"
-                        
                         if symbol in TARGET_COINS:
                             TARGET_COINS.remove(symbol)
                             save_watchlist()
-                            if symbol in COIN_BRAIN_CACHE:
-                                del COIN_BRAIN_CACHE[symbol]
-                            if symbol in LAST_ALERTED_TIER:
-                                del LAST_ALERTED_TIER[symbol]
-                            send_telegram_msg(chat_id, f"🗑️ `{symbol}` deleted & removed from persistent watchlist.")
-                        else:
-                            send_telegram_msg(chat_id, f"⚠️ `{symbol}` not found in active watchlist.")
-                    else:
-                        send_telegram_msg(chat_id, "⚠️ Usage: `/delete SUI` or `/remove SUI`")
-                        
+                            send_telegram_msg(chat_id, f"🗑️ `{symbol}` deleted from active watchlist.")
                 elif text.startswith("/list"):
-                    items = []
-                    for c in TARGET_COINS:
-                        brain = COIN_BRAIN_CACHE.get(c, {})
-                        ath = brain.get('ath_price', 0)
-                        atl = brain.get('atl_price', 0)
-                        atl_date = brain.get('atl_date', 'Unknown')
-                        items.append(f"• `{c}` (ATH: `${ath:.4f}` | ATL: `${atl:.4f}` on `{atl_date}`)")
+                    items = [f"• `{c}`" for c in TARGET_COINS]
                     msg = f"📋 *Active Watchlist ({len(TARGET_COINS)} Coins):*\n\n" + "\n".join(items)
                     send_telegram_msg(chat_id, msg)
-
                 elif text.startswith("/check") or text.startswith("/pullback"):
                     parts = text.split()
                     if len(parts) > 1:
                         raw = parts[1].upper().replace("/", "")
                         symbol = f"{raw}/USDT" if not raw.endswith("USDT") else f"{raw[:-4]}/USDT"
-                        send_telegram_msg(chat_id, f"🔍 Generating deep pullback analysis for `{symbol}`...")
                         report = generate_pullback_report(symbol)
                         send_telegram_msg(chat_id, format_telegram_alert(report))
-                    else:
-                        send_telegram_msg(chat_id, "🔍 Scanning watchlist for major drawdowns...")
-                        for coin in TARGET_COINS:
-                            report = generate_pullback_report(coin)
-                            max_drop = max(report['monthly_drawdown_pct'], report['ath_drawdown_pct'])
-                            if max_drop >= MIN_ALERT_DRAWDOWN_PCT:
-                                send_telegram_msg(chat_id, format_telegram_alert(report))
-                                time.sleep(1.5) # Anti-spam stagger buffer
-                                
                 elif text.startswith("/trending"):
-                    send_telegram_msg(chat_id, "🔥 Manual trigger: Scanning market for top trending volume coins...")
                     auto_discover_trending_coins()
-                    
     except Exception:
         pass
 
 def run_pullback_engine():
     print("="*75)
-    print("⚡ CRYPTOPULSE AI v11.0 - UNIFIED PULLBACK & RECOVERY ENGINE")
+    print("⚡ CRYPTOPULSE AI v12.1 - PROACTIVE PRE-RALLY & REBOUND ENGINE")
     print("="*75)
-    print(f"✅ Telegram Channel Active (Chat ID: {SAVED_CHAT_ID})")
     
     initialize_exchange_connection()
     initialize_all_brains()
     
     startup_msg = (
-        "🟢 *CryptoPulse Engine v11.0 Live*\n"
-        "🌱 ATH & Explicit ATL Date Tracking Active.\n"
-        "👑 Prime Accumulation Confluence Engine Enabled.\n"
-        "📱 Commands: `/add SUI`, `/delete SUI`, `/list`, `/check PEPE`, `/trending`"
+        "🟢 *CryptoPulse Engine v12.1 Live*\n"
+        "⚡ Proactive Pre-Rally Alerts Active.\n"
+        "🛡️ +7.5% Rebound Anti-Spam Filter Lock Enabled.\n"
+        "📱 Commands: `/add SUI`, `/delete SUI`, `/list`, `/check BTC`"
     )
     send_telegram_msg(SAVED_CHAT_ID, startup_msg)
-    print("📲 Startup confirmation sent to Telegram.\n")
     
     scan_count = 1
     while True:
@@ -675,41 +545,35 @@ def run_pullback_engine():
         
         for symbol in list(TARGET_COINS):
             report = generate_pullback_report(symbol)
-            
             should_alert = should_send_anti_spam_notification(symbol, report)
             
             max_drop = max(report['monthly_drawdown_pct'], report['ath_drawdown_pct'])
-            status_str = f"DROP DETECTED (-{max_drop:.1f}%)" if max_drop >= MIN_ALERT_DRAWDOWN_PCT else "NORMAL"
+            status_str = "NORMAL"
+            if report.get('is_pre_rally'):
+                status_str = "🔥 PRE-RALLY DETECTED"
+            elif max_drop >= MIN_ALERT_DRAWDOWN_PCT:
+                status_str = f"DROP (-{max_drop:.1f}%)"
+                
             if should_alert:
                 status_str += " 📲 [ALERT SENT]"
-            
+                send_telegram_msg(SAVED_CHAT_ID, format_telegram_alert(report))
+                alerts_sent += 1
+                time.sleep(1.5)
+                
             results.append({
                 'Coin': report['symbol'],
                 'Price ($)': f"{report['current_price']:.6f}",
-                'ATH ($)': f"{report['ath_price']:.4f}",
-                'ATL ($)': f"{report['atl_price']:.4f}",
-                'ATL Date': report['atl_date'],
                 'Monthly Drop': f"-{report['monthly_drawdown_pct']:.1f}%",
-                'ATH Drop': f"-{report['ath_drawdown_pct']:.1f}%",
                 'Status': status_str
             })
-            
-            if should_alert:
-                send_telegram_msg(SAVED_CHAT_ID, format_telegram_alert(report))
-                alerts_sent += 1
-                time.sleep(1.5) # Anti-spam delay between multiple concurrent alerts
-                
             time.sleep(0.12)
             
         summary_df = pd.DataFrame(results)
         print(summary_df.to_string(index=False))
-        print(f"\nSummary: Scanned {len(TARGET_COINS)} coins | Telegram Alerts Sent This Scan: {alerts_sent}")
         
         if MAX_SCANS and scan_count >= MAX_SCANS:
-            print(f"🏁 Cloud scan run completed ({scan_count} cycles). Exiting cleanly.")
             break
             
-        print("⏳ Sleeping 60s until next scan cycle... (Press Stop button to end)")
         scan_count += 1
         time.sleep(60)
 
