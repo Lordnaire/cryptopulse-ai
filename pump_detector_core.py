@@ -28,7 +28,7 @@ MAX_SCANS = int(MAX_SCANS_ENV) if MAX_SCANS_ENV else None
 
 WATCHLIST_FILE = "watchlist.json"
 MIN_ALERT_DRAWDOWN_PCT = 30.0  
-MIN_REBOUND_FOR_REALERT_PCT = 7.5  # Adjusted: 5% to 10% rebound unlocks repeat alerts
+MIN_REBOUND_FOR_REALERT_PCT = 7.5  # 5% to 10% rebound unlocks repeat alerts
 
 # Updated Default Watchlist (Excludes DOGE, PEPE, XRP, SHIB, LINK, FLOKI, LAB)
 DEFAULT_WATCHLIST = [
@@ -47,7 +47,7 @@ EXCHANGE_PROVIDERS = ['gateio', 'binance', 'kucoin', 'okx', 'kraken', 'bybit']
 exchange = None              
 COIN_BRAIN_CACHE = {}        
 LAST_ALERTED_TIER = {}       
-LAST_ALERTED_PRICE = {}      # Memory to enforce the 7.5% rebound rule
+LAST_ALERTED_PRICE = {}      
 LAST_TELEGRAM_UPDATE_ID = 0  
 
 def load_watchlist():
@@ -57,7 +57,6 @@ def load_watchlist():
             with open(WATCHLIST_FILE, 'r') as f:
                 data = json.load(f)
                 if isinstance(data, list) and len(data) > 0:
-                    # Filter out removed pairs if present in historical JSON
                     excluded = ['DOGE/USDT', 'PEPE/USDT', 'XRP/USDT', 'SHIB/USDT', 'LINK/USDT', 'FLOKI/USDT', 'LAB/USDT']
                     TARGET_COINS = [c for c in data if c not in excluded]
                     print(f"📁 Watchlist loaded from persistent memory ({len(TARGET_COINS)} coins).")
@@ -178,6 +177,7 @@ def fetch_3year_historical_data(symbol):
         prev_rsi = float(df.iloc[-2]['rsi']) if len(df) > 1 and not df['rsi'].isnull().iloc[-2] else 50.0
         rsi_reversal_turn = (prev_rsi <= 38.0 and latest_rsi > prev_rsi)
         
+        # Multi-timeframe Volume & Acceleration Check
         recent_5m_pct = ((current_price - float(df.iloc[-2]['close'])) / float(df.iloc[-2]['close'])) * 100 if len(df) > 1 else 0.0
         is_pre_rally = (volume_surge >= 1.8 and recent_5m_pct >= 1.2 and latest_rsi >= 45.0)
         is_breakout = (volume_surge >= 3.0 and recent_5m_pct >= 2.5)
@@ -223,8 +223,24 @@ def fetch_3year_historical_data(symbol):
 def auto_discover_trending_coins():
     global exchange, TARGET_COINS
     print("🔥 Running Proactive Market-Wide Pre-Rally Scanner...")
+    
+    # Try multiple exchanges if the primary one has latency
+    tickers = None
+    for ex_id in EXCHANGE_PROVIDERS:
+        try:
+            ex_class = getattr(ccxt, ex_id)
+            temp_ex = ex_class({'enableRateLimit': True, 'timeout': 8000})
+            tickers = temp_ex.fetch_tickers()
+            if tickers:
+                break
+        except Exception:
+            continue
+
+    if not tickers:
+        print("⚠️ Could not fetch market tickers across providers.")
+        return
+
     try:
-        tickers = exchange.fetch_tickers()
         trending_candidates = []
         excluded = ['DOGE/USDT', 'PEPE/USDT', 'XRP/USDT', 'SHIB/USDT', 'LINK/USDT', 'FLOKI/USDT', 'LAB/USDT']
         
@@ -233,7 +249,6 @@ def auto_discover_trending_coins():
                 quote_vol = float(ticker.get('quoteVolume', 0.0) or 0.0)
                 pct_change = float(ticker.get('percentage', 0.0) or 0.0)
                 
-                # Filter for early volume surge and initial momentum
                 if quote_vol >= 8_000_000 and pct_change >= 4.0:
                     trending_candidates.append((symbol, quote_vol, pct_change, float(ticker.get('last', 0.0))))
                     
@@ -245,7 +260,6 @@ def auto_discover_trending_coins():
             save_watchlist()
             fetch_3year_historical_data(sym)
             
-            # Send immediate alert notification on discovery
             msg = (
                 f"━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🔥 *PRE-RALLY ALERT DISCOVERY*\n"
@@ -427,15 +441,10 @@ def get_drawdown_tier(pct):
     return 0
 
 def should_send_anti_spam_notification(symbol, report):
-    """
-    STRICT ANTI-SPAM RULE (V12.1):
-    Suppresses alerts unless the coin drops into a deeper tier OR rebounds by >= 7.5%.
-    """
     max_drop = max(report['monthly_drawdown_pct'], report['ath_drawdown_pct'])
     current_tier = get_drawdown_tier(max_drop)
     current_price = report['current_price']
     
-    # Priority Override: Early Pre-Rally or Breakout alerts bypass standard pullback filters once
     if report.get('is_pre_rally') or report.get('is_breakout'):
         return True
         
@@ -447,7 +456,6 @@ def should_send_anti_spam_notification(symbol, report):
     
     is_new_deeper_tier = current_tier > last_tier
     
-    # Check if price has made a 5% - 10% (7.5% avg) rebound since the last alert
     has_substantially_rebounded = False
     if last_price > 0:
         pct_gain_from_last = ((current_price - last_price) / last_price) * 100
@@ -516,16 +524,16 @@ def handle_telegram_commands():
 
 def run_pullback_engine():
     print("="*75)
-    print("⚡ CRYPTOPULSE AI v12.1 - PROACTIVE PRE-RALLY & REBOUND ENGINE")
+    print("⚡ CRYPTOPULSE AI v12.2 - HIGH FREQUENCY PRE-RALLY ENGINE")
     print("="*75)
     
     initialize_exchange_connection()
     initialize_all_brains()
     
     startup_msg = (
-        "🟢 *CryptoPulse Engine v12.1 Live*\n"
-        "⚡ Proactive Pre-Rally Alerts Active.\n"
-        "🛡️ +7.5% Rebound Anti-Spam Filter Lock Enabled.\n"
+        "🟢 *CryptoPulse Engine v12.2 Live*\n"
+        "⚡ High-Frequency Pre-Rally Scanning Active.\n"
+        "🛡️ Multi-Exchange Failover Router & +7.5% Rebound Filter Enabled.\n"
         "📱 Commands: `/add SUI`, `/delete SUI`, `/list`, `/check BTC`"
     )
     send_telegram_msg(SAVED_CHAT_ID, startup_msg)
