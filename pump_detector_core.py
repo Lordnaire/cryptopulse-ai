@@ -29,7 +29,7 @@ MAX_SCANS = int(MAX_SCANS_ENV) if MAX_SCANS_ENV else None
 WATCHLIST_FILE = "watchlist.json"
 MIN_ALERT_DRAWDOWN_PCT = 30.0  
 
-# V16.0 TRAINED RALLY PATTERN & SNIPER PARAMETERS (Stability-hardcoded)
+# V16.x TRAINED RALLY PATTERN & SNIPER PARAMETERS (Stability-hardcoded)
 SNIPER_24H_DROP_REQ = -8.0     
 SNIPER_24H_VOL_REQ = 7_000_000 
 TRAINED_RSI_OVERSOLD = 28      
@@ -77,7 +77,7 @@ def load_watchlist_v15():
                 TARGET_COINS = active_core + active_discovered
                 
                 DISCOVERED_COINS_DATA = data.get('discovered_data', {})
-                print(f"📁 V16.1 Reliable Watchlist loaded ({len(TARGET_COINS)} active). USER_BANNED_COINS strictly excluded.")
+                print(f"📁 V16.3 Stable Watchlist loaded ({len(TARGET_COINS)} active).")
                 return
         except Exception: pass
     # Fallback to Core, apply exclusion
@@ -226,7 +226,7 @@ def fetch_deep_intelligence_brain(symbol):
         return None
 
 def general_market_panic_sniper():
-    """Market-Wide "Panic Sniper" Discovery (Modular V16.1 Non-Stop Stability)."""
+    """Market-Wide "Panic Sniper" Discovery (Modular V16.3 Stability Lockdown)."""
     global exchange, TARGET_COINS, DISCOVERED_COINS_DATA
     print("🎯 Running Automated General Market Panic Sniper Scan...")
     tickers = exchange.fetch_tickers()
@@ -235,7 +235,7 @@ def general_market_panic_sniper():
     try:
         discoveries = []
         
-        # V16.0 Hardcoded Symbol Blacklist Lockdown
+        # V16.x Hardcoded Symbol Blacklist Lockdown
         BANNED_SYMBOLS_LIST = ['DOGE', 'PEPE', 'XRP', 'SHIB', 'LINK', 'FLOKI', 'LAB']
         
         for symbol, ticker in tickers.items():
@@ -246,7 +246,7 @@ def general_market_panic_sniper():
                 pct_change_24h = float(ticker.get('percentage', 0.0) or 0.0)
                 quote_vol_24h = float(ticker.get('quoteVolume', 0.0) or 0.0)
                 
-                # Broad Panic: Deep red 24h drop + high 24h vol (Hardcoded stability)
+                # Broad Panic Sniper: Deep red 24h drop + high 24h vol (Hardcoded stability)
                 if pct_change_24h <= -8.0 and quote_vol_24h >= 7_000_000:
                     discoveries.append((symbol, quote_vol_24h, pct_change_24h))
                     
@@ -264,10 +264,11 @@ def general_market_panic_sniper():
             
             df5 = pd.DataFrame(ohlcv5, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            # V16.1 STABILITY LOCKDOWN: Validate that we received at least 2 full candles.
-            if len(df5) < 2:
-                print(f"⚠️ Sniper: Insufficient data for velocity check on {sym}. Skipping safely.")
-                continue # Skip this coin and proceed to next, prevent crash!
+            # Modular V16.3 stability Lockdown: Explicit data verification (Fixes IndexError crashing)
+            # We must ensure we have BOTH current (-1) and previous (-2) candles before calculation.
+            if len(df5) < 3: # Require at least 3 candles to be safe for multiple calculations
+                print(f"⚠️ Sniper: Insufficient local data context on {sym}. Skipping safely.")
+                continue # <-- This guarantees line 207 cannot run and cannot crash.
                 
             current_price = float(df5.iloc[-1]['close'])
             
@@ -286,7 +287,8 @@ def general_market_panic_sniper():
             volume_spike_context = (latest_volume / local_vol_avg >= 4.0) if local_vol_avg > 0 else False
             
             # 3. Entry Candle Velocity (+1.6% 5m acceleration)
-            # V16.1 explicit definition fix out-of-bounds error
+            # This is the line that previously crashed (v16.1 Line 207, v16.3 Line 213)
+            # Protected by the V16.3 lockdown check above.
             recent_5m_pct = ((current_price - float(df5.iloc[-2]['close'])) / float(df5.iloc[-2]['close']) * 100)
             is_trigger_candle = recent_5m_pct >= 1.6
             
@@ -302,7 +304,6 @@ def general_market_panic_sniper():
                 DISCOVERED_COINS_DATA[sym] = {'timestamp': time.time(), 'source': 'sniper', 'drop24': drop24}
                 save_watchlist_v15() 
                 
-                # Update header badge logic in discovery alert (Modular V15.4 fix)
                 send_telegram_msg(SAVED_CHAT_ID, format_telegram_alert(brain, discovery_header=True))
                 time.sleep(1.5)
     except Exception as e:
@@ -324,6 +325,8 @@ def format_telegram_alert(data, discovery_header=False):
     if data.get('rsi_reversal_turn'): confluences.append(f"🔥 RSI Bullish Turn (`RSI: {data['rsi']:.1f}`)")
     if data.get('whale_absorption'): confluences.append(f"🐋 Whale Absorption (`{data['volume_surge_vs_avg']:.1f}x` Vol Surge)")
 
+    conf_text = "\n".join([f"  • {c}" for c in confluences]) if confluences else "  • Standard Dip Level"
+
     risk_rate = "🟥 EXTREME" if mon_dd >= 75 else "🟠 HIGH" if mon_dd >= 50 else "🟢 LOW"
 
     msg = (
@@ -337,7 +340,7 @@ def format_telegram_alert(data, discovery_header=False):
         f"  • 🏆 3-Yr ATH Drop: `-{ath_dd:.1f}%`\n"
         f"  • 🌱 3-Yr ATL: `${data['atl_price']:.6f}`\n\n"
         f"⚡ *TECHNICAL CONFLUENCE*\n"
-        f"{'\n'.join([f'  • {c}' for c in confluences]) or '  • Standard Dip Level'}\n\n"
+        f"{conf_text}\n\n"
         f"🛡️ *RISK:* {risk_rate}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -392,17 +395,17 @@ def generate_pullback_report_v15(symbol):
         return None
 
 def run_pullback_engine_v15():
-    """Main execution non-stop monitoring loop (Modular V16.1 NON-STOP RELIABILITY)."""
+    """Main execution non-stop monitoring loop (Modular V16.3 NON-STOP RELIABILITY)."""
     global HEALTH_CHECK_TIMESTAMP, WATCHLIST_CLEANUP_TIMESTAMP
     print("="*75)
-    print("⚡ CRYPTOPULSE AI v16.1 NON-STOP RELIABILITY PATCH")
+    print("⚡ CRYPTOPULSE AI v16.3 NON-STOP RELIABILITY PATCH")
     print("="*75)
     initialize_exchange_connection()
     # Initialize list & persistence structure
     load_watchlist_v15()
     
     # Pre-Initialization Safety Logic
-    print("🧠 Fetching Deep Brains for Watchlist (v16.1 Bulletproofing)...")
+    print("🧠 Fetching Deep Brains for Watchlist (v16.3 Bulletproofing)...")
     for coin in list(TARGET_COINS):
         try:
             # Bulletproof boot training: If API fails, create a safe fallback.
@@ -419,7 +422,7 @@ def run_pullback_engine_v15():
         time.sleep(0.12)
     print("✅ Non-Stop Initialization Complete!\n")
     
-    send_telegram_msg(SAVED_CHAT_ID, "🟢 *CryptoPulse v16.1 Non-Stop Reliability Patch Live*\nOut-of-bounds crash fixed in sniper discovery. Modular modular safety added. Monitoring resumed.")
+    send_telegram_msg(SAVED_CHAT_ID, "🟢 *CryptoPulse v16.3 Non-Stop Reliability Patch Live*\nOut-of-bounds crash fixed again in sniper discovery. Modular modular safety added. Monitoring resumed.")
     
     scan_count = 1
     # Global Loop safety net: The script can recover itself without crash.
@@ -429,10 +432,10 @@ def run_pullback_engine_v15():
             if scan_count % 10 == 0: general_market_panic_sniper()
             if time.time() - WATCHLIST_CLEANUP_TIMESTAMP >= 86400: cleanup_discovered_coins_lifecycle(); WATCHLIST_CLEANUP_TIMESTAMP = time.time()
                 
-            print(f"\n--- [V16.1 NON-STOP MONITORING SCAN #{scan_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+            print(f"\n--- [V16.3 NON-STOP MONITORING SCAN #{scan_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
             results = []
             for symbol in list(TARGET_COINS):
-                # V16.1 INDIVIDUAL COIN SAFETY BOOT
+                # V16.x INDIVIDUAL COIN SAFETY BOOT
                 try:
                     report = generate_pullback_report_v15(symbol)
                     if not report: continue
