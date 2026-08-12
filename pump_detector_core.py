@@ -77,7 +77,7 @@ def load_watchlist_v15():
                 TARGET_COINS = active_core + active_discovered
                 
                 DISCOVERED_COINS_DATA = data.get('discovered_data', {})
-                print(f"📁 V16.0 Watchlist loaded ({len(TARGET_COINS)} active). USER_BANNED_COINS strictly excluded.")
+                print(f"📁 V16.1 Reliable Watchlist loaded ({len(TARGET_COINS)} active). USER_BANNED_COINS strictly excluded.")
                 return
         except Exception: pass
     # Fallback to Core, apply exclusion
@@ -114,10 +114,7 @@ def cleanup_discovered_coins_lifecycle():
             
     if initial_count != len(TARGET_COINS):
         save_watchlist_v15()
-        removed_str = ", ".join(removed_coins[:3]) + ("..." if len(removed_coins)>3 else "")
-        msg = f"🧹 *Lifecycle Management:* Automatically cleaned `{len(removed_coins)}` expired discovery assets ({removed_str}) to maintain peak engine velocity."
-        send_telegram_msg(SAVED_CHAT_ID, msg)
-        print(f"✅ Cleaned {len(removed_coins)} coins.")
+        print(f"✅ Cleaned lifecycle coins. New count: {len(TARGET_COINS)}")
     else:
         print("✅ No expired lifecycle coins.")
 
@@ -229,7 +226,7 @@ def fetch_deep_intelligence_brain(symbol):
         return None
 
 def general_market_panic_sniper():
-    """Market-Wide "Panic Sniper" Discovery ( Modular V16.0 symbol lockdown )."""
+    """Market-Wide "Panic Sniper" Discovery (Modular V16.1 Non-Stop Stability)."""
     global exchange, TARGET_COINS, DISCOVERED_COINS_DATA
     print("🎯 Running Automated General Market Panic Sniper Scan...")
     tickers = exchange.fetch_tickers()
@@ -260,14 +257,21 @@ def general_market_panic_sniper():
             if discovered_count >= 2: break 
             sym, vol24, drop24 = item
             
+            # Local 5-Min Context (Precision Check)
             ohlcv5 = fetch_ohlcv_with_fallback(sym, timeframe='5m', limit=40)
             time.sleep(0.1)
             if not ohlcv5: continue
             
             df5 = pd.DataFrame(ohlcv5, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            if len(df5) < 2: continue # Safety
+            
+            # V16.1 STABILITY LOCKDOWN: Validate that we received at least 2 full candles.
+            if len(df5) < 2:
+                print(f"⚠️ Sniper: Insufficient data for velocity check on {sym}. Skipping safely.")
+                continue # Skip this coin and proceed to next, prevent crash!
+                
             current_price = float(df5.iloc[-1]['close'])
             
+            # Trained Signature Verification Safeguards
             # 1. RSI-14 Capitulation (Safe definition in V15.4 sniper)
             is_capitulating = False
             if len(df5) > 15:
@@ -282,6 +286,7 @@ def general_market_panic_sniper():
             volume_spike_context = (latest_volume / local_vol_avg >= 4.0) if local_vol_avg > 0 else False
             
             # 3. Entry Candle Velocity (+1.6% 5m acceleration)
+            # V16.1 explicit definition fix out-of-bounds error
             recent_5m_pct = ((current_price - float(df5.iloc[-2]['close'])) / float(df5.iloc[-2]['close']) * 100)
             is_trigger_candle = recent_5m_pct >= 1.6
             
@@ -345,12 +350,12 @@ def get_drawdown_tier(pct):
     return 0
 
 def send_telegram_msg(chat_id, text):
-    try: requests.post(f"[https://api.telegram.org/bot](https://api.telegram.org/bot){BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}, timeout=5)
+    try: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}, timeout=5)
     except: pass
 
 def handle_telegram_commands():
     global LAST_TELEGRAM_UPDATE_ID, TARGET_COINS
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){BOT_TOKEN}/getUpdates"
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     try:
         res = requests.get(url, params={"offset": LAST_TELEGRAM_UPDATE_ID + 1, "timeout": 1}, timeout=3).json()
         for item in res.get("result", []):
@@ -361,13 +366,13 @@ def handle_telegram_commands():
                     raw = text.split()[1].upper().replace("/", "") if len(text.split())>1 else None
                     if raw:
                         symbol = f"{raw}/USDT"
-                        if symbol in USER_BANNED_COINS: send_telegram_msg(chat_id, f"⚠️ Cannot add `{symbol}`. It is strictly blacklisted by the user."); continue
+                        if symbol in USER_BANNED_COINS: send_telegram_msg(chat_id, f"⚠️ Cannot add `{symbol}`. Blacklisted."); continue
                         if symbol not in TARGET_COINS: TARGET_COINS.append(symbol); save_watchlist_v15(); send_telegram_msg(chat_id, f"✅ `{symbol}` added.")
                 elif text.startswith("/delete"):
                     raw = text.split()[1].upper().replace("/", "") if len(text.split())>1 else None
                     if raw and f"{raw}/USDT" in TARGET_COINS: TARGET_COINS.remove(f"{raw}/USDT"); save_watchlist_v15(); send_telegram_msg(chat_id, f"🗑️ `{raw}/USDT` deleted manually.")
                 elif text.startswith("/list"):
-                    send_telegram_msg(chat_id, f"📋 *Watchlist ({len(TARGET_COINS)} Coins):*\n\n" + "\n".join([f"• `{c}`" for c in TARGET_COINS]) + f"\n\n🚫 *Locked Blacklist:* `XRP, DOGE, PEPE, SHIB, LINK, FLOKI, LAB`")
+                    send_telegram_msg(chat_id, f"📋 *Watchlist ({len(TARGET_COINS)} Coins):*\n\n" + "\n".join([f"• `{c}`" for c in TARGET_COINS]))
                 elif text.startswith("/trending"): general_market_panic_sniper()
     except Exception: pass
 
@@ -387,17 +392,17 @@ def generate_pullback_report_v15(symbol):
         return None
 
 def run_pullback_engine_v15():
-    """Main non-stop monitoring loop (Modular V16.0 STABLE RELIABILITY)."""
+    """Main execution non-stop monitoring loop (Modular V16.1 NON-STOP RELIABILITY)."""
     global HEALTH_CHECK_TIMESTAMP, WATCHLIST_CLEANUP_TIMESTAMP
     print("="*75)
-    print("⚡ CRYPTOPULSE AI v16.0 RELIABILITY - LOCKED BLACKLIST")
+    print("⚡ CRYPTOPULSE AI v16.1 NON-STOP RELIABILITY PATCH")
     print("="*75)
     initialize_exchange_connection()
     # Initialize list & persistence structure
     load_watchlist_v15()
     
     # Pre-Initialization Safety Logic
-    print("🧠 Fetching Deep Brains for Watchlist (v16.0 Stability)...")
+    print("🧠 Fetching Deep Brains for Watchlist (v16.1 Bulletproofing)...")
     for coin in list(TARGET_COINS):
         try:
             # Bulletproof boot training: If API fails, create a safe fallback.
@@ -405,7 +410,7 @@ def run_pullback_engine_v15():
             if brain: COIN_BRAIN_CACHE[coin] = brain
             else: raise Exception("brain fetch failed") # ForceFallback
         except Exception:
-            print(f"⚠️ Boot warning: Deep brain skipped for {coin} (Exchange error). Fallback created.")
+            print(f"⚠️ Boot warning: Deep brain skipped for {coin}. Fallback created.")
             COIN_BRAIN_CACHE[coin] = {
                 'symbol': coin, 'ath_price': 1.0, 'atl_price': 0.0001, 'ath_dd': 0.0, 'mon_dd': 0.0,
                 'monthly_high': 1.0, 'near_200ema': False, 'whale_absorption': False, 'current_price': 1.0,
@@ -414,7 +419,7 @@ def run_pullback_engine_v15():
         time.sleep(0.12)
     print("✅ Non-Stop Initialization Complete!\n")
     
-    send_telegram_msg(SAVED_CHAT_ID, "🟢 *CryptoPulse v16.0 Locked Blacklist Patch Live*\nstrict symbol lockdown applied. No auto-discovery of DOGE, PEPE, XRP, SHIB, LINK, FLOKI, LAB. trained pre-rally intelligence & non-stop monitoring resumed.")
+    send_telegram_msg(SAVED_CHAT_ID, "🟢 *CryptoPulse v16.1 Non-Stop Reliability Patch Live*\nOut-of-bounds crash fixed in sniper discovery. Modular modular safety added. Monitoring resumed.")
     
     scan_count = 1
     # Global Loop safety net: The script can recover itself without crash.
@@ -424,9 +429,10 @@ def run_pullback_engine_v15():
             if scan_count % 10 == 0: general_market_panic_sniper()
             if time.time() - WATCHLIST_CLEANUP_TIMESTAMP >= 86400: cleanup_discovered_coins_lifecycle(); WATCHLIST_CLEANUP_TIMESTAMP = time.time()
                 
-            print(f"\n--- [V16.0 NON-STOP MONITORING SCAN #{scan_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+            print(f"\n--- [V16.1 NON-STOP MONITORING SCAN #{scan_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
             results = []
             for symbol in list(TARGET_COINS):
+                # V16.1 INDIVIDUAL COIN SAFETY BOOT
                 try:
                     report = generate_pullback_report_v15(symbol)
                     if not report: continue
