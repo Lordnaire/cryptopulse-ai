@@ -1,42 +1,65 @@
-name: CryptoPulse AI 24/7 Pullback Engine
+name: "Crypto Intelligence Engine v16.3"
 
 on:
   schedule:
-    # Runs every 30 minutes automatically in the cloud for $0
+    # Trigger approximately every 30 minutes (25m private run + buffer)
     - cron: '*/30 * * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub UI anytime
+  workflow_dispatch: # Enable manual start for testing
+
+# Permissions needed for persistence commits
+permissions:
+  contents: write
 
 jobs:
   run-engine:
     runs-on: ubuntu-latest
+    timeout-minutes: 58 # Absolute hard limit to prevent hanging jobs
+
+    env:
+      # CRITICAL SECRETS
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      SAVED_CHAT_ID: ${{ secrets.SAVED_CHAT_ID }}
+      
+      # private PRIVATE ARCHITECTURE SETTINGS
+      # Run 55 1-minute monitor cycles before self-terminating (fits <1hr job)
+      MAX_SCANS: 55
 
     steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v3
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+      # Step 1: Initialize Modern Data Connection (Updated to V4)
+      - name: "Checkout code (Modern V4)"
+        uses: actions/checkout@v4
         with:
-          python-version: '3.11'
+          persist-credentials: true
+          fetch-depth: 0 # Full history needed for persistence merging
 
-      - name: Install Dependencies
+      # Step 2: Initialize Modern Python Environment (Updated to V5)
+      - name: "Setup Python 3.10 (Modern V5)"
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip' # Automated caching for faster boot
+
+      # Step 3: Configure Cloud Identity for Persistence Commits
+      - name: "Configure Git Identity"
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          git config --global user.name "CryptoPulse Cloud Engine v16.3"
+          git config --global user.email "cloud-engine@cryptopulse.ai"
 
-      - name: Execute Pullback Scanner Cloud Session
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          SAVED_CHAT_ID: ${{ secrets.SAVED_CHAT_ID }}
-          MAX_SCANS: 25 # Runs 25 scan loops (~25 mins), then next scheduled job takes over seamlessly
+      # Step 4: Core Execution - Non-Stop Monitoring & trained Sniping
+      - name: "Run CryptoPulse v16.3 Non-Stop Engine"
         run: |
           python pump_detector_core.py
+        continue-on-error: true # Engine has internal self-recovery, allow graceful exits
 
-      - name: Commit Watchlist Changes (Persistence)
-        if: always()
+      # Step 5: Data Persistence Sync - Save Watchlist & Brain State
+      # Critical for Private cloud tier to remember changes between jobs.
+      - name: "Commit & Sync Data Persistence"
         run: |
-          git config --global user.name 'CryptoPulse Bot'
-          git config --global user.email 'bot@cryptopulse.ai'
-          git add watchlist.json || true
-          git commit -m "Auto-update persistent watchlist [skip ci]" || true
-          git push || true
+          # Use rebase merging to ensure history remains clean
+          git pull --rebase origin main
+          
+          # Only attempt commit if files have changed
+          git add watchlist.json
+          git add pump_detector_core.py # Commit v16.3 headers for verification
+          
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Sync Data Persistence (v16.3 Stable Session)" && git push origin main)
