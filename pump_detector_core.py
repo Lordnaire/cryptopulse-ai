@@ -29,12 +29,7 @@ MAX_SCANS = int(MAX_SCANS_ENV) if MAX_SCANS_ENV else None
 WATCHLIST_FILE = "watchlist.json"
 MIN_ALERT_DRAWDOWN_PCT = 30.0  
 
-# V15.3 STABILITY PARAMETERS (Hardcoded inside logic for resilience)
-# VRS_REL_VOL_SURGE = 4.0
-# VRS_INIT_VELOCITY_PCT = 1.6
-# TRAINED_RSI_OVERSOLD = 28
-# REBOUND_FOR_REALERT_PCT = 7.5
-
+# Non-Stop Lifecycle Management
 DISCOVERED_COIN_LIFESPAN_HOURS = 24
 
 CORE_WATCHLIST = [
@@ -51,6 +46,7 @@ DISCOVERED_COINS_DATA = {}
 
 EXCHANGE_PROVIDERS = ['gateio', 'binance', 'kucoin', 'okx', 'kraken', 'bybit']
 
+# Global runtime state (stability initializations)
 exchange, COIN_BRAIN_CACHE, LAST_ALERTED_TIER, LAST_ALERTED_PRICE, LAST_TELEGRAM_UPDATE_ID = None, {}, {}, {}, 0  
 HEALTH_CHECK_TIMESTAMP, WATCHLIST_CLEANUP_TIMESTAMP = time.time(), time.time()
 
@@ -67,7 +63,7 @@ def load_watchlist_v15():
                 active_discovered = [c for c in persistent_coins if c not in CORE_WATCHLIST and c not in excluded]
                 TARGET_COINS = active_core + active_discovered
                 DISCOVERED_COINS_DATA = data.get('discovered_data', {})
-                print(f"📁 V15.3 Stable Watchlist loaded ({len(TARGET_COINS)} active).")
+                print(f"📁 V15.4 Reliable Watchlist loaded ({len(TARGET_COINS)} active).")
                 return
         except Exception: pass
     TARGET_COINS = list(CORE_WATCHLIST)
@@ -76,8 +72,7 @@ def load_watchlist_v15():
 def save_watchlist_v15():
     try:
         data_to_save = {
-            'watchlist': TARGET_COINS,
-            'discovered_data': DISCOVERED_COINS_DATA,
+            'watchlist': TARGET_COINS, 'discovered_data': DISCOVERED_COINS_DATA,
             'excluded_by_user': ['DOGE/USDT', 'PEPE/USDT', 'XRP/USDT', 'SHIB/USDT', 'LINK/USDT', 'FLOKI/USDT', 'LAB/USDT']
         }
         with open(WATCHLIST_FILE, 'w') as f:
@@ -126,6 +121,7 @@ def fetch_ohlcv_with_fallback(symbol, timeframe='1d', limit=1000):
     try:
         return exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     except Exception:
+        # Failover router logic
         for ex_id in EXCHANGE_PROVIDERS:
             if ex_id == exchange.id: continue
             try:
@@ -138,13 +134,16 @@ def fetch_ohlcv_with_fallback(symbol, timeframe='1d', limit=1000):
         return []
 
 def calculate_ema(series, span=200):
+    # V15.4 Safety Safeguard: Validate series length before calculation to prevent mismatch crashes
+    if len(series) < span: return series
     return series.ewm(span=span, adjust=False).mean()
 
 def calculate_rsi(series, period=14):
-    if len(series) <= period: return series
+    # V15.4 Safety Safeguard: Validate series length before calculation to prevent ValueError mismatch fatal crashes (Fixes SUI/XRP/Gateio glitch)
+    if len(series) <= period + 1: return series 
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
@@ -159,7 +158,7 @@ def fetch_btc_market_climate():
     except Exception: return "⚖️ NEUTRAL MARKET CLIMATE"
 
 def fetch_deep_intelligence_brain(symbol):
-    """Fetches deep context (Modular V15.3 STABLE Patch)."""
+    """Fetches deep context (Modular V15.4 Stability Patch with calculation safeguards)."""
     global exchange
     try:
         ohlcv = fetch_ohlcv_with_fallback(symbol, timeframe='1d', limit=1000)
@@ -180,17 +179,25 @@ def fetch_deep_intelligence_brain(symbol):
         monthly_pace_pct = ((current_price - month_start_price) / month_start_price) * 100 if month_start_price > 0 else 0.0
         atl_rebound_pct = ((current_price - atl_price) / atl_price) * 100 if atl_price > 0 else 0.0
 
-        df['ema_200'] = calculate_ema(df['close'], span=200)
-        latest_ema200 = float(df.iloc[-1]['ema_200']) if len(df) >= 200 else 0.0
-        near_200ema = latest_ema200 > 0 and (abs(current_price - latest_ema200) / latest_ema200 * 100 <= 3.5)
+        # EMA Calculation Safeguard
+        if len(df['close']) > 200:
+            df['ema_200'] = calculate_ema(df['close'], span=200)
+            latest_ema200 = float(df.iloc[-1]['ema_200'])
+            near_200ema = latest_ema200 > 0 and (abs(current_price - latest_ema200) / latest_ema200 * 100 <= 3.5)
+        else:
+            near_200ema = False; latest_ema200 = 0.0
 
         vol_20d_avg, latest_volume = float(df['volume'].tail(20).mean()), float(df.iloc[-1]['volume'])
         volume_surge_vs_avg = (latest_volume / vol_20d_avg) if vol_20d_avg > 0 else 1.0
         whale_absorption = volume_surge_vs_avg >= 1.5
 
-        df['rsi'] = calculate_rsi(df['close'], period=14)
-        latest_rsi, prev_rsi = float(df.iloc[-1]['rsi']), float(df.iloc[-2]['rsi']) if len(df) > 1 else 50.0
-        rsi_reversal_turn = (prev_rsi <= 38.0 and latest_rsi > prev_rsi)
+        # RSI Calculation Safeguard (critical V15.4 crash fix)
+        latest_rsi = 50.0; rsi_reversal_turn = False
+        if len(df['close']) > 15:
+            df['rsi'] = calculate_rsi(df['close'], period=14)
+            if not df['rsi'].isnull().iloc[-1]:
+                latest_rsi, prev_rsi = float(df.iloc[-1]['rsi']), float(df.iloc[-2]['rsi'])
+                rsi_reversal_turn = (prev_rsi <= 38.0 and latest_rsi > prev_rsi)
         
         return {
             'symbol': symbol,
@@ -203,7 +210,7 @@ def fetch_deep_intelligence_brain(symbol):
         }
         
     except Exception as e:
-        print(f"⚠️ Error processing {symbol}: {e}")
+        print(f"⚠️ Error processing brainContext for {symbol}: {e}")
         return None
 
 def general_market_panic_sniper():
@@ -222,7 +229,7 @@ def general_market_panic_sniper():
                 pct_change_24h = float(ticker.get('percentage', 0.0) or 0.0)
                 quote_vol_24h = float(ticker.get('quoteVolume', 0.0) or 0.0)
                 
-                # Broad Panic: Deep red 24h drop + high 24h vol (Hardcoded V15.3 stability)
+                # Broad Panic Sniper: Deep red 24h drop + high 24h vol (Hardcoded stability)
                 if pct_change_24h <= -8.0 and quote_vol_24h >= 7_000_000:
                     discoveries.append((symbol, quote_vol_24h, pct_change_24h))
                     
@@ -233,25 +240,31 @@ def general_market_panic_sniper():
             if discovered_count >= 2: break 
             sym, vol24, drop24 = item
             
+            # Local 5-Min Context (Precision Check)
             ohlcv5 = fetch_ohlcv_with_fallback(sym, timeframe='5m', limit=40)
             time.sleep(0.1)
             if not ohlcv5: continue
             
             df5 = pd.DataFrame(ohlcv5, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            if len(df5) < 2: continue # Safety
             current_price = float(df5.iloc[-1]['close'])
             
-            # Trained Signature Verification (V15.3 hardcoded parameters for CRASH PREVENTION)
-            rsi_series5 = calculate_rsi(df5['close'], period=14)
-            latest_rsi5 = float(rsi_series5.iloc[-1]) if not rsi_series5.empty else 50.0
-            is_capitulating = latest_rsi5 <= 28.0 # TRAINED_RSI_OVERSOLD
+            # Trained Signature Verification Safeguards
+            # 1. RSI-14 Capitulation (Safe definition in V15.4 sniper)
+            is_capitulating = False
+            if len(df5) > 15:
+                rsi_series5 = calculate_rsi(df5['close'], period=14)
+                if not rsi_series5.empty and not rsi_series5.isnull().iloc[-1]:
+                    latest_rsi5 = float(rsi_series5.iloc[-1])
+                    if latest_rsi5 <= 28.0: is_capitulating = True
             
+            # 2. Local Volume Surge (4x Local Average)
             local_vol_avg = float(df5['volume'].iloc[:-1].mean()) 
             latest_volume = float(df5.iloc[-1]['volume'])
-            # VRS_REL_VOL_SURGE = 4.0
             volume_spike_context = (latest_volume / local_vol_avg >= 4.0) if local_vol_avg > 0 else False
             
-            # VRS_INIT_VELOCITY_PCT = 1.6
-            recent_5m_pct = ((current_price - float(df5.iloc[-2]['close'])) / float(df5.iloc[-2]['close']) * 100) if len(df5)>1 else 0.0
+            # 3. Entry Candle Velocity (+1.6% 5m acceleration)
+            recent_5m_pct = ((current_price - float(df5.iloc[-2]['close'])) / float(df5.iloc[-2]['close']) * 100)
             is_trigger_candle = recent_5m_pct >= 1.6
             
             # PRECISION CONFLUENCE MATCH
@@ -259,23 +272,27 @@ def general_market_panic_sniper():
                 
                 brain = fetch_deep_intelligence_brain(sym)
                 if brain: COIN_BRAIN_CACHE[sym] = brain
-                else: continue
+                else: continue # brain failed, skip
                 
                 discovered_count += 1
                 TARGET_COINS.append(sym)
                 DISCOVERED_COINS_DATA[sym] = {'timestamp': time.time(), 'source': 'sniper', 'drop24': drop24}
                 save_watchlist_v15() 
                 
+                # Update header badge logic in discovery alert (Modular V15.4 fix)
                 send_telegram_msg(SAVED_CHAT_ID, format_telegram_alert(brain, discovery_header=True))
                 time.sleep(1.5)
     except Exception as e:
-        print(f"⚠️ Error during trending discovery: {e}")
+        print(f"⚠️ Error during trending discovery snippet: {e}")
 
 def format_telegram_alert(data, discovery_header=False):
-    """Formats report dynamically."""
-    ath_dd = ((data['ath_price'] - data['current_price']) / data['ath_price'] * 100) if data['ath_price'] > 0 else 0.0
-    mon_dd = ((data['monthly_high'] - data['current_price']) / data['monthly_high'] * 100) if data['monthly_high'] > 0 else 0.0
-    max_drop = max(mon_dd, ath_dd)
+    """Formats pullback report dynamically."""
+    # Safety Check: Calculate dd context if missing in fallback brains
+    if 'mon_dd' not in data:
+        data['mon_dd'] = ((data['monthly_high'] - data['current_price']) / data['monthly_high'] * 100) if data['monthly_high'] > 0 else 0.0
+        data['ath_dd'] = ((data['ath_price'] - data['current_price']) / data['ath_price'] * 100) if data['ath_price'] > 0 else 0.0
+
+    max_drop = max(data['mon_dd'], data['ath_dd'])
     
     if discovery_header: header_badge = "👑 *PRECISION MARKET DISCOVERY (Panic Sniper)*"
     elif max_drop >= 70: header_badge = "🟥 🚨 EXTREME PULLBACK ALERT (-70%+)"
@@ -283,11 +300,11 @@ def format_telegram_alert(data, discovery_header=False):
     else: header_badge = "🟦 📉 NOTABLE PULLBACK DETECTED (-30%+)"
 
     confluences = []
-    if data.get('near_200ema'): confluences.append(f"🧱 Near 200-Day EMA Support")
+    if data.get('near_200ema'): confluences.append(f"🧱 Sitting near 200-Day EMA Support")
     if data.get('rsi_reversal_turn'): confluences.append(f"🔥 RSI Bullish Turn")
     if data.get('whale_absorption'): confluences.append(f"🐋 Whale Absorption")
 
-    risk_rate = "🟥 EXTREME" if mon_dd >= 75 else "🟠 HIGH" if mon_dd >= 50 else "🟢 LOW"
+    risk_rate = "🟥 EXTREME" if data['mon_dd'] >= 75 else "🟠 HIGH" if data['mon_dd'] >= 50 else "🟢 LOW"
 
     msg = (
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -296,8 +313,8 @@ def format_telegram_alert(data, discovery_header=False):
         f"🪙 *ASSET:* `{data['symbol']}`\n"
         f"💵 *Current Price:* `${data['current_price']:.6f}`\n\n"
         f"📌 *DRAWDOWN SUMMARY*\n"
-        f"  • Monthly Drop: `-{mon_dd:.1f}%`\n"
-        f"  • 🏆 3-Yr ATH Drop: `-{ath_dd:.1f}%`\n"
+        f"  • Monthly Drop: `-{data['mon_dd']:.1f}%`\n"
+        f"  • 🏆 3-Yr ATH Drop: `-{data['ath_dd']:.1f}%`\n"
         f"  • 🌱 3-Yr ATL: `${data['atl_price']:.6f}`\n\n"
         f"⚡ *TECHNICAL CONFLUENCE*\n"
         f"{'\n'.join([f'  • {c}' for c in confluences]) or '  • Standard Dip Level'}\n\n"
@@ -320,6 +337,7 @@ def handle_telegram_commands():
     global LAST_TELEGRAM_UPDATE_ID, TARGET_COINS
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     try:
+        # Define offset explicitly to fix crash risk
         res = requests.get(url, params={"offset": LAST_TELEGRAM_UPDATE_ID + 1, "timeout": 1}, timeout=3).json()
         for item in res.get("result", []):
             LAST_TELEGRAM_UPDATE_ID = item["update_id"]
@@ -327,86 +345,119 @@ def handle_telegram_commands():
                 text, chat_id = item["message"]["text"].strip(), item["message"]["chat"]["id"]
                 if text.startswith("/add"):
                     raw = text.split()[1].upper().replace("/", "") if len(text.split())>1 else None
-                    if raw and f"{raw}/USDT" not in TARGET_COINS: TARGET_COINS.append(f"{raw}/USDT"); save_watchlist_v15(); send_telegram_msg(chat_id, f"✅ `{raw}/USDT` added.")
+                    if raw and f"{raw}/USDT" not in TARGET_COINS: TARGET_COINS.append(f"{raw}/USDT"); save_watchlist_v15(); send_telegram_msg(chat_id, f"✅ `{raw}/USDT` added manually.")
                 elif text.startswith("/delete"):
                     raw = text.split()[1].upper().replace("/", "") if len(text.split())>1 else None
-                    if raw and f"{raw}/USDT" in TARGET_COINS: TARGET_COINS.remove(f"{raw}/USDT"); save_watchlist_v15(); send_telegram_msg(chat_id, f"🗑️ `{raw}/USDT` deleted.")
+                    if raw and f"{raw}/USDT" in TARGET_COINS: TARGET_COINS.remove(f"{raw}/USDT"); save_watchlist_v15(); send_telegram_msg(chat_id, f"🗑️ `{raw}/USDT` deleted manually.")
                 elif text.startswith("/list"): send_telegram_msg(chat_id, f"📋 *Watchlist ({len(TARGET_COINS)} Coins):*\n\n" + "\n".join([f"• `{c}`" for c in TARGET_COINS]))
                 elif text.startswith("/trending"): general_market_panic_sniper()
     except Exception: pass
 
+def generate_pullback_report_v15(symbol):
+    """Modular. Rebuilds deep brain from current market data."""
+    global exchange
+    # Safety Try Block Around Entire Data Fetch
+    try:
+        report = fetch_deep_intelligence_brain(symbol)
+        if report is None: return None
+                
+        report['market_climate'] = fetch_btc_market_climate()
+        report['reason'] = 'General Market Profit-Taking'
+        report['risk_rate'] = 'Moderate'
+        # In-Line Drawdown Context Generation (Stability Critical)
+        report['ath_dd'] = ((report['ath_price'] - report['current_price']) / report['ath_price'] * 100) if report['ath_price'] > 0 else 0.0
+        report['mon_dd'] = ((report['monthly_high'] - report['current_price']) / report['monthly_high'] * 100) if report['monthly_high'] > 0 else 0.0
+        return report
+    except Exception as e:
+        print(f"⚠️ Unexpected error generating report for {symbol}: {e}")
+        return None
+
 def run_pullback_engine_v15():
-    """Main execution non-stop monitoring loop (Modular V15.3 STABILITY PATCH)."""
+    """Main execution non-stop monitoring loop (Modular V15.4 NON-STOP RELIABILITY PATCH)."""
     global HEALTH_CHECK_TIMESTAMP, WATCHLIST_CLEANUP_TIMESTAMP
     print("="*75)
-    print("⚡ CRYPTOPULSE AI v15.3 STABILITY PATCH - NON-STOP RUN")
+    print("⚡ CRYPTOPULSE AI v15.4 RELIABILITY PATCH - NON-STOP RUN")
     print("="*75)
     initialize_exchange_connection()
+    # Initialize list & persistence structure
     load_watchlist_v15()
     
-    # Initialization
-    print("🧠 Fetching Deep Brains for Watchlist (v15.3 Stability)...")
+    # Pre-Initialization Safety Logic (Fixes Boot Crashes)
+    print("🧠 Fetching Deep Brains for Watchlist (v15.4 Bulletproofing)...")
     for coin in list(TARGET_COINS):
-        brain = fetch_deep_intelligence_brain(coin)
-        if brain: COIN_BRAIN_CACHE[coin] = brain
-        else: # Fallback brain to prevent boot crash
+        try:
+            # Bulletproof boot training: If API fails, create a safe fallback.
+            brain = fetch_deep_intelligence_brain(coin)
+            if brain: COIN_BRAIN_CACHE[coin] = brain
+            else: raise Exception("brain fetch failed") # ForceFallback
+        except Exception as bootErr:
+            print(f"⚠️ Boot warning: Deep brain training skipped for {coin} (Exchange error). Fallback created. No crash.")
+            # V15.4 Fallback Brain to prevent monitor crash
             COIN_BRAIN_CACHE[coin] = {
-                'symbol': coin, 'ath_price': 1.0, 'atl_price': 0.0001,
+                'symbol': coin, 'ath_price': 1.0, 'atl_price': 0.0001, 'ath_dd': 0.0, 'mon_dd': 0.0,
                 'monthly_high': 1.0, 'near_200ema': False, 'whale_absorption': False, 'current_price': 1.0,
                 'rsi': 50.0, 'rsi_reversal_turn': False, 'recovery_probability_pct': 50
             }
         time.sleep(0.12)
-    print("✅ Initialization Complete!\n")
+    print("✅ Non-Stop Initialization Complete!\n")
     
-    send_telegram_msg(SAVED_CHAT_ID, "🟢 *CryptoPulse v15.3 Non-Stop Patch Live*\nNameError crash fixed. Try/Except safety added. Monitoring resumed.")
+    send_telegram_msg(SAVED_CHAT_ID, "🟢 *CryptoPulse v15.4 Non-Stop Reliability Patch Live*\nInitialization & RSI calculation crashes fixed. Global non-stop error catching active. Monitoring resumed.")
     
     scan_count = 1
+    # Global Loop safety net: The script can now recover itself without crash.
     while True:
-        handle_telegram_commands()
-        if scan_count % 10 == 0: general_market_panic_sniper()
-        if time.time() - WATCHLIST_CLEANUP_TIMESTAMP >= 86400: cleanup_discovered_coins_lifecycle(); WATCHLIST_CLEANUP_TIMESTAMP = time.time()
-            
-        print(f"\n--- [V15.3 STABLE MONITORING SCAN #{scan_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
-        results = []
-        for symbol in list(TARGET_COINS):
-            # V15.3 STABILITY BULLETPROOFING
-            try:
-                report = fetch_deep_intelligence_brain(symbol)
-                if not report: continue
+        try:
+            handle_telegram_commands()
+            if scan_count % 10 == 0: general_market_panic_sniper()
+            if time.time() - WATCHLIST_CLEANUP_TIMESTAMP >= 86400: cleanup_discovered_coins_lifecycle(); WATCHLIST_CLEANUP_TIMESTAMP = time.time()
                 
-                # In-Line Drawdown Recalculation (Critical Stability)
-                brain_context = COIN_BRAIN_CACHE.get(symbol, report)
-                ath_dd = ((brain_context['ath_price'] - report['current_price']) / brain_context['ath_price'] * 100) if brain_context['ath_price'] > 0 else 0.0
-                mon_dd = ((brain_context['monthly_high'] - report['current_price']) / brain_context['monthly_high'] * 100) if brain_context['monthly_high'] > 0 else 0.0
-                max_drop = max(mon_dd, ath_dd)
-                
-                # V15.3 IN-LINE ANTI-SPAM LOGIC (Crash Fix: No NameError risks)
-                current_tier = get_drawdown_tier(max_drop)
-                if current_tier == 0: continue # Don't alert if no drop
+            print(f"\n--- [V15.4 NON-STOP MONITORING SCAN #{scan_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+            results = []
+            for symbol in list(TARGET_COINS):
+                # V15.4 INDIVIDUAL COIN SAFETY BOOT
+                try:
+                    report = generate_pullback_report_v15(symbol)
+                    if not report: continue
                     
-                last_tier = LAST_ALERTED_TIER.get(symbol, 0)
-                last_price = LAST_ALERTED_PRICE.get(symbol, 0.0)
-                
-                is_deeper_tier = current_tier > last_tier
-                # V15.3 Hardcoded Rebound (REBOUND_FOR_REALERT_PCT = 7.5)
-                has_rebounded = last_price > 0 and ((report['current_price'] - last_price) / last_price * 100 >= 7.5)
-                
-                if is_deeper_tier or has_rebounded or last_price == 0.0:
-                    LAST_ALERTED_TIER[symbol] = current_tier
-                    LAST_ALERTED_PRICE[symbol] = report['current_price']
-                    send_telegram_msg(SAVED_CHAT_ID, format_telegram_alert(report))
-                    time.sleep(1.5) # Anti-spam buffer
+                    # Modular. Deep brain Context fallback check.
+                    ddContext = COIN_BRAIN_CACHE.get(symbol, report)
+                    ath_dd = ((ddContext['ath_price'] - report['current_price']) / ddContext['ath_price'] * 100) if ddContext['ath_price'] > 0 else 0.0
+                    mon_dd = ((ddContext['monthly_high'] - report['current_price']) / ddContext['monthly_high'] * 100) if ddContext['monthly_high'] > 0 else 0.0
+                    max_drop = max(mon_dd, ath_dd)
                     
-                results.append({'Coin': symbol, 'Price': f"{report['current_price']:.6f}", 'Monthly Drop': f"-{mon_dd:.1f}%"})
-                
-            except Exception as coin_err:
-                print(f"⚠️ Error scanning {symbol} this cycle: {coin_err}")
-                continue # Skip this coin and proceed to next
+                    # In-Line Anti-Spam calculation (Hardcoded resilience)
+                    current_tier = get_drawdown_tier(max_drop)
+                    if current_tier == 0: continue
+                        
+                    last_tier = LAST_ALERTED_TIER.get(symbol, 0)
+                    last_price = LAST_ALERTED_PRICE.get(symbol, 0.0)
+                    
+                    is_deeper_tier = current_tier > last_tier
+                    # Rebound hardcoded to 7.5% for resilience
+                    has_rebounded = last_price > 0 and ((report['current_price'] - last_price) / last_price * 100 >= 7.5)
+                    
+                    if is_deeper_tier or has_rebounded or last_price == 0.0:
+                        LAST_ALERTED_TIER[symbol] = current_tier
+                        LAST_ALERTED_PRICE[symbol] = report['current_price']
+                        # V15.4: Format alert safely accepts report
+                        send_telegram_msg(SAVED_CHAT_ID, format_telegram_alert(report))
+                        time.sleep(1.5)
+                        
+                    results.append({'Coin': symbol, 'Price': f"{report['current_price']:.6f}", 'Monthly Drop': f"-{mon_dd:.1f}%"})
+                    
+                except Exception as coin_err:
+                    print(f"⚠️ Error scanning {symbol} this cycle (Skipping, no crash): {coin_err}")
+                    continue # Skip this coin and proceed immediately to next coin on list
 
-            time.sleep(0.12) # API stagger buffer
+                time.sleep(0.12) # API stagger buffer
+                
+            if MAX_SCANS and scan_count >= MAX_SCANS: break
+            scan_count += 1; time.sleep(60)
             
-        if MAX_SCANS and scan_count >= MAX_SCANS: break
-        scan_count += 1; time.sleep(60)
+        except Exception as globalErr:
+            print(f"🚨 CRITICAL NON-STOP ERROR (Self-Recovery Active): {globalErr}")
+            time.sleep(60) # Prevent tight crash loop before restart
+            continue # Automatically restarts main while loop from beginning
 
 if __name__ == "__main__":
     run_pullback_engine_v15()
